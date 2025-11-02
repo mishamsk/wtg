@@ -130,7 +130,7 @@ impl GitHubClient {
     }
 
     /// Find closing PR commits for an issue by examining timeline events
-    /// Returns (commit_shas, pr_numbers)
+    /// Returns (`commit_shas`, `pr_numbers`)
     async fn find_closing_pr_commits(&self, issue_number: u64) -> (Vec<String>, Vec<u64>) {
         let client = match self.client.as_ref() {
             Some(c) => c,
@@ -148,41 +148,42 @@ impl GitHubClient {
         );
 
         // Use octocrab's raw API to fetch timeline (as it may not have full timeline support)
-        match client.get::<serde_json::Value, _, _>(&timeline_url, None::<&()>).await {
-            Ok(events) => {
-                // Parse timeline events to find "closed" events with PR references
-                if let Some(events_array) = events.as_array() {
-                    for event in events_array {
-                        // Look for "closed" events with a source PR
-                        if let Some(event_type) = event.get("event").and_then(|v| v.as_str()) {
-                            if event_type == "closed" {
-                                // Check if there's a commit_id or source PR
-                                if let Some(commit_id) = event.get("commit_id").and_then(|v| v.as_str()) {
-                                    closing_commits.push(commit_id.to_string());
-                                }
-                                // Also check for source.issue (cross-referenced PR)
-                                if let Some(source) = event.get("source") {
-                                    if let Some(issue) = source.get("issue") {
-                                        if let Some(pr_number) = issue.get("number").and_then(|v| v.as_u64()) {
-                                            closing_prs.push(pr_number);
-                                            // Fetch this PR to get its merge commit
-                                            if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(pr_number).await {
-                                                if let Some(merge_sha) = pr.merge_commit_sha {
-                                                    closing_commits.push(merge_sha);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+        if let Ok(events) = client
+            .get::<serde_json::Value, _, _>(&timeline_url, None::<&()>)
+            .await
+        {
+            // Parse timeline events to find "closed" events with PR references
+            if let Some(events_array) = events.as_array() {
+                for event in events_array {
+                    // Look for "closed" events with a source PR
+                    if let Some(event_type) = event.get("event").and_then(|v| v.as_str())
+                        && event_type == "closed"
+                    {
+                        // Check if there's a commit_id or source PR
+                        if let Some(commit_id) = event.get("commit_id").and_then(|v| v.as_str()) {
+                            closing_commits.push(commit_id.to_string());
+                        }
+                        // Also check for source.issue (cross-referenced PR)
+                        if let Some(source) = event.get("source")
+                            && let Some(issue) = source.get("issue")
+                            && let Some(pr_number) =
+                                issue.get("number").and_then(serde_json::Value::as_u64)
+                        {
+                            closing_prs.push(pr_number);
+                            // Fetch this PR to get its merge commit
+                            if let Ok(pr) =
+                                client.pulls(&self.owner, &self.repo).get(pr_number).await
+                                && let Some(merge_sha) = pr.merge_commit_sha
+                            {
+                                closing_commits.push(merge_sha);
                             }
                         }
                     }
                 }
             }
-            Err(_) => {
-                // Timeline API might not be available or issue might not exist
-                // Return empty lists
-            }
+        } else {
+            // Timeline API might not be available or issue might not exist
+            // Return empty lists
         }
 
         (closing_commits, closing_prs)

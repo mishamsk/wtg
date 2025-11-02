@@ -99,10 +99,8 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
     if let Some(file_info) = git.find_file(input) {
         matches.push("file");
 
-        let release = git.find_closest_release_with_github(
-            &github_releases,
-            &file_info.last_commit.hash,
-        );
+        let release =
+            git.find_closest_release_with_github(&github_releases, &file_info.last_commit.hash);
 
         let (github_url, author_urls) = if let Some(gh) = &github {
             let url = Some(gh.commit_url(&file_info.last_commit.hash));

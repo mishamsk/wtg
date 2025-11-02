@@ -222,7 +222,11 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
                 // Issue URL format: https://github.com/owner/repo/issues/123
                 if let Some(base_url) = info.url.rsplit_once("/issues/").map(|(base, _)| base) {
                     for pr_number in &info.closing_prs {
-                        println!("   {} PR #{}", "🔀".yellow(), pr_number.to_string().as_str().cyan().bold());
+                        println!(
+                            "   {} PR #{}",
+                            "🔀".yellow(),
+                            pr_number.to_string().as_str().cyan().bold()
+                        );
                         let pr_url = format!("{base_url}/pull/{pr_number}");
                         print_link(&pr_url);
                     }

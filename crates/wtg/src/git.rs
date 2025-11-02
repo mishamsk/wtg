@@ -31,9 +31,9 @@ pub struct TagInfo {
     pub commit_hash: String,
     pub is_semver: bool,
     pub semver_info: Option<SemverInfo>,
-    pub is_release: bool, // Whether this is a GitHub release
+    pub is_release: bool,             // Whether this is a GitHub release
     pub release_name: Option<String>, // GitHub release name (if is_release)
-    pub release_url: Option<String>, // GitHub release URL (if is_release)
+    pub release_url: Option<String>,  // GitHub release URL (if is_release)
     pub published_at: Option<String>, // GitHub release published date (if is_release)
 }
 
