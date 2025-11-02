@@ -1,29 +1,302 @@
 use crate::error::Result;
-use crate::identifier::IdentifiedThing;
+use crate::identifier::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing};
 use crossterm::style::Stylize;
 
 pub fn display(thing: IdentifiedThing) -> Result<()> {
     match thing {
-        IdentifiedThing::Commit {
-            info,
-            release,
-            github_url,
-            author_url,
-        } => display_commit(info, release, github_url, author_url),
-
-        IdentifiedThing::File {
-            info,
-            release,
-            github_url,
-            author_urls,
-        } => display_file(info, release, github_url, author_urls),
-
-        IdentifiedThing::Issue { info, release } => display_issue(info, release),
-
-        IdentifiedThing::Tag { info, github_url } => display_tag(info, github_url),
+        IdentifiedThing::Enriched(info) => display_enriched(info),
+        IdentifiedThing::File(file_result) => display_file(file_result),
+        IdentifiedThing::TagOnly(tag_info, github_url) => display_tag_warning(tag_info, github_url),
     }
 
     Ok(())
+}
+
+/// Display tag with humor - tags aren't supported yet
+fn display_tag_warning(tag_info: crate::git::TagInfo, github_url: Option<String>) {
+    println!(
+        "{} {}",
+        "🏷️  Found tag:".green().bold(),
+        tag_info.name.cyan()
+    );
+    println!();
+    println!("{}", "🐎 Whoa there, slow down cowboy!".yellow().bold());
+    println!();
+    println!(
+        "   {}",
+        "Tags aren't fully baked yet. I found it, but can't tell you much about it.".white()
+    );
+    println!(
+        "   {}",
+        "Come back when you have a commit hash, PR, or issue to look up!".white()
+    );
+
+    if let Some(url) = github_url {
+        println!();
+        print_link(&url);
+    }
+}
+
+/// Display enriched info - the main display logic
+/// Order depends on what the user searched for
+fn display_enriched(info: EnrichedInfo) {
+    match &info.entry_point {
+        EntryPoint::IssueNumber(_) => {
+            // User searched for issue - lead with issue
+            display_identification(&info.entry_point);
+            println!();
+
+            if let Some(issue) = &info.issue {
+                display_issue_section(issue);
+                println!();
+            }
+
+            if let Some(pr) = &info.pr {
+                display_pr_section(pr, true); // true = show as "the fix"
+                println!();
+            }
+
+            if let Some(commit) = &info.commit {
+                display_commit_section(
+                    commit,
+                    &info.commit_url,
+                    &info.commit_author_github_url,
+                    info.pr.as_ref(),
+                );
+                println!();
+            }
+
+            display_missing_info(&info);
+
+            if info.commit.is_some() {
+                display_release_info(info.release, info.commit_url.as_deref());
+            }
+        }
+        EntryPoint::PullRequestNumber(_) => {
+            // User searched for PR - lead with PR
+            display_identification(&info.entry_point);
+            println!();
+
+            if let Some(pr) = &info.pr {
+                display_pr_section(pr, false); // false = not a fix, just a PR
+                println!();
+            }
+
+            if let Some(commit) = &info.commit {
+                display_commit_section(
+                    commit,
+                    &info.commit_url,
+                    &info.commit_author_github_url,
+                    info.pr.as_ref(),
+                );
+                println!();
+            }
+
+            display_missing_info(&info);
+
+            if info.commit.is_some() {
+                display_release_info(info.release, info.commit_url.as_deref());
+            }
+        }
+        _ => {
+            // User searched for commit or something else - lead with commit
+            display_identification(&info.entry_point);
+            println!();
+
+            if let Some(commit) = &info.commit {
+                display_commit_section(
+                    commit,
+                    &info.commit_url,
+                    &info.commit_author_github_url,
+                    info.pr.as_ref(),
+                );
+                println!();
+            }
+
+            if let Some(pr) = &info.pr {
+                display_pr_section(pr, false);
+                println!();
+            }
+
+            if let Some(issue) = &info.issue {
+                display_issue_section(issue);
+                println!();
+            }
+
+            display_missing_info(&info);
+
+            if info.commit.is_some() {
+                display_release_info(info.release, info.commit_url.as_deref());
+            }
+        }
+    }
+}
+
+/// Display what the user searched for
+fn display_identification(entry_point: &EntryPoint) {
+    match entry_point {
+        EntryPoint::Commit(hash) => {
+            println!(
+                "{} {}",
+                "🔍 Found commit:".green().bold(),
+                hash.as_str().cyan()
+            );
+        }
+        EntryPoint::PullRequestNumber(num) => {
+            println!(
+                "{} #{}",
+                "🔀 Found PR:".green().bold(),
+                num.to_string().cyan()
+            );
+        }
+        EntryPoint::IssueNumber(num) => {
+            println!(
+                "{} #{}",
+                "🐛 Found issue:".green().bold(),
+                num.to_string().cyan()
+            );
+        }
+        EntryPoint::FilePath(path) => {
+            println!(
+                "{} {}",
+                "📄 Found file:".green().bold(),
+                path.as_str().cyan()
+            );
+        }
+        EntryPoint::Tag(tag) => {
+            println!(
+                "{} {}",
+                "🏷️  Found tag:".green().bold(),
+                tag.as_str().cyan()
+            );
+        }
+    }
+}
+
+/// Display commit information (the core section, always present when resolved)
+fn display_commit_section(
+    commit: &crate::git::CommitInfo,
+    commit_url: &Option<String>,
+    author_url: &Option<String>,
+    pr: Option<&crate::github::PullRequestInfo>,
+) {
+    println!("{}", "💻 The Commit:".cyan().bold());
+    println!(
+        "   {} {}",
+        "Hash:".yellow(),
+        commit.short_hash.as_str().cyan()
+    );
+
+    // Show commit author
+    print_author_subsection(
+        "Who wrote this gem:",
+        &commit.author_name,
+        &commit.author_email,
+        author_url.as_deref(),
+    );
+
+    // Show commit message if not a PR
+    if pr.is_none() {
+        print_message_with_essay_joke(&commit.message, None, &commit.message_lines);
+    }
+
+    println!("   {} {}", "📅".yellow(), commit.date.as_str().dark_grey());
+
+    if let Some(url) = commit_url {
+        print_link(url);
+    }
+}
+
+/// Display PR information (enrichment layer 1)
+fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
+    println!("{}", "🔀 The Pull Request:".magenta().bold());
+    println!(
+        "   {} #{}",
+        "Number:".yellow(),
+        pr.number.to_string().cyan()
+    );
+
+    // PR author - different wording if this is shown as "the fix" for an issue
+    if let Some(author) = &pr.author {
+        let header = if is_fix {
+            "Who's brave:"
+        } else {
+            "Who merged this beauty:"
+        };
+        print_author_subsection(header, author, "", pr.author_url.as_deref());
+    }
+
+    // PR description (overrides commit message)
+    print_message_with_essay_joke(&pr.title, pr.body.as_deref(), &pr.title.lines().count());
+
+    // Merge status
+    if let Some(merge_sha) = &pr.merge_commit_sha {
+        println!("   {} {}", "✅ Merged:".green(), merge_sha[..7].cyan());
+    } else {
+        println!("   {}", "❌ Not merged yet".yellow().italic());
+    }
+
+    print_link(&pr.url);
+}
+
+/// Display issue information (enrichment layer 2)
+fn display_issue_section(issue: &crate::github::IssueInfo) {
+    println!("{}", "🐛 The Issue:".red().bold());
+    println!(
+        "   {} #{}",
+        "Number:".yellow(),
+        issue.number.to_string().cyan()
+    );
+
+    // Issue author (who's whining)
+    if let Some(author) = &issue.author {
+        print_author_subsection("Who's whining:", author, "", issue.author_url.as_deref());
+    }
+
+    // Issue description
+    print_message_with_essay_joke(
+        &issue.title,
+        issue.body.as_deref(),
+        &issue.title.lines().count(),
+    );
+
+    print_link(&issue.url);
+}
+
+/// Display missing information (graceful degradation)
+fn display_missing_info(info: &EnrichedInfo) {
+    // Issue without PR
+    if info.issue.is_some() && info.pr.is_none() {
+        println!(
+            "{}",
+            "🤷 No PR found for this issue... still open or closed without a fix?"
+                .yellow()
+                .italic()
+        );
+        println!();
+    }
+
+    // PR without commit (not merged)
+    if info.pr.is_some() && info.commit.is_none() {
+        println!(
+            "{}",
+            "⏳ This PR hasn't been merged yet, so no commit to show."
+                .yellow()
+                .italic()
+        );
+        println!();
+    }
+
+    // Issue without commit (issue found, but no PR or not merged)
+    if info.issue.is_some() && info.commit.is_none() && info.pr.is_none() {
+        println!(
+            "{}",
+            "🔍 Couldn't trace this issue to a commit. Maybe it's still being worked on?"
+                .yellow()
+                .italic()
+        );
+        println!();
+    }
 }
 
 // Helper functions for consistent formatting
@@ -33,110 +306,72 @@ fn print_link(url: &str) {
     println!("   {} {}", "🔗".blue(), url.blue().underlined());
 }
 
-/// Print author information with optional profile URL
-fn print_author_with_profile(name: &str, email: &str, profile_url: Option<&str>) {
-    println!(
-        "   {} {} ({})",
-        "👤".yellow(),
-        name.cyan(),
-        email.dark_grey()
-    );
+/// Print author information as a subsection (indented)
+fn print_author_subsection(
+    header: &str,
+    name: &str,
+    email_or_username: &str,
+    profile_url: Option<&str>,
+) {
+    println!("   {} {}", "👤".yellow(), header.dark_grey());
+
+    if email_or_username.is_empty() {
+        println!("      {}", name.cyan());
+    } else {
+        println!("      {} ({})", name.cyan(), email_or_username.dark_grey());
+    }
 
     if let Some(url) = profile_url {
-        print_link(url);
+        println!("      {} {}", "🔗".blue(), url.blue().underlined());
     }
 }
 
-/// Print a single commit summary line with optional URL
-fn print_commit_summary(
-    short_hash: &str,
-    author: &str,
-    date: &str,
-    message: &str,
-    commit_url: Option<&str>,
-) {
-    println!(
-        "   {} by {} on {}",
-        short_hash.cyan(),
-        author.cyan(),
-        date.dark_grey()
-    );
-    println!("   {} {}", "📝".yellow(), message.white());
+/// Print a message/description with essay joke if it's long
+fn print_message_with_essay_joke(first_line: &str, full_text: Option<&str>, line_count: &usize) {
+    println!("   {} {}", "📝".yellow(), first_line.white().bold());
 
-    if let Some(url) = commit_url {
-        print_link(url);
+    // Check if we should show the essay joke
+    if let Some(text) = full_text {
+        let char_count = text.len();
+
+        // Show essay joke if >100 chars or multi-line
+        if char_count > 100 || *line_count > 1 {
+            let extra_lines = if *line_count > 1 { line_count - 1 } else { 0 };
+            let message = if extra_lines > 0 {
+                format!(
+                    "Someone likes to write essays... {} more line{}",
+                    extra_lines,
+                    if extra_lines == 1 { "" } else { "s" }
+                )
+            } else {
+                format!("Someone likes to write essays... {char_count} characters")
+            };
+
+            println!("      {} {}", "📚".yellow(), message.dark_grey().italic());
+        }
     }
 }
 
-fn display_commit(
-    info: crate::git::CommitInfo,
-    release: Option<crate::git::TagInfo>,
-    github_url: Option<String>,
-    author_url: Option<String>,
-) {
-    println!(
-        "{} {}",
-        "🔍 Found commit:".green().bold(),
-        info.short_hash.cyan()
-    );
-    println!();
+/// Display file information (special case)
+fn display_file(file_result: FileResult) {
+    let info = file_result.file_info;
 
-    // Commit message
-    println!("{} {}", "📝".yellow(), info.message.white().bold());
-    println!("   {} {}", "📅".yellow(), info.date.dark_grey());
-
-    // Snarky comment if multi-line commit message
-    if info.message_lines > 1 {
-        let extra_lines = info.message_lines - 1;
-        println!(
-            "   {} {}",
-            "📚".yellow(),
-            format!(
-                "Someone likes to write essays... {} more line{}",
-                extra_lines,
-                if extra_lines == 1 { "" } else { "s" }
-            )
-            .dark_grey()
-            .italic()
-        );
-    }
-
-    println!();
-
-    // Who to blame
-    println!("{}", "👎 Who's to blame for this pesky bug:".red().bold());
-    print_author_with_profile(&info.author_name, &info.author_email, author_url.as_deref());
-
-    println!();
-
-    // Release info
-    display_release_info(release, github_url.as_deref());
-
-    // Commit link
-    if let Some(url) = github_url {
-        println!();
-        print_link(&url);
-    }
-}
-
-fn display_file(
-    info: crate::git::FileInfo,
-    release: Option<crate::git::TagInfo>,
-    github_url: Option<String>,
-    author_urls: Vec<Option<String>>,
-) {
     println!("{} {}", "📄 Found file:".green().bold(), info.path.cyan());
     println!();
 
     // Last touched
     println!("{}", "🕐 Last touched:".yellow().bold());
-    print_commit_summary(
-        &info.last_commit.short_hash,
-        &info.last_commit.author_name,
-        &info.last_commit.date,
-        &info.last_commit.message,
-        github_url.as_deref(),
+    println!(
+        "   {} by {} on {}",
+        info.last_commit.short_hash.cyan(),
+        info.last_commit.author_name.cyan(),
+        info.last_commit.date.dark_grey()
     );
+    println!("   {} {}", "📝".yellow(), info.last_commit.message.white());
+
+    if let Some(url) = &file_result.commit_url {
+        print_link(url);
+    }
 
     println!();
 
@@ -152,7 +387,7 @@ fn display_file(
                 name.as_str().cyan()
             );
 
-            if let Some(Some(url)) = author_urls.get(idx) {
+            if let Some(Some(url)) = file_result.author_urls.get(idx) {
                 print!(" {}", format!("({url})").blue().underlined());
             }
 
@@ -163,105 +398,7 @@ fn display_file(
     }
 
     // Release info
-    display_release_info(release, None);
-}
-
-fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::TagInfo>) {
-    let emoji = if info.is_pr { "🔀" } else { "🐛" };
-    let type_str = if info.is_pr { "PR" } else { "Issue" };
-
-    println!(
-        "{} #{}: {}",
-        format!("{emoji} Found {type_str}").green().bold(),
-        info.number.to_string().cyan(),
-        info.title.white().bold()
-    );
-    println!();
-
-    // Author info
-    if let Some(author) = &info.author {
-        print!("   {} {}", "👤".yellow(), author.as_str().cyan());
-        if let Some(url) = &info.author_url {
-            print!(" {}", format!("({url})").blue().underlined());
-        }
-        println!();
-    }
-
-    print_link(&info.url);
-    println!();
-
-    // For PRs, show merge commit
-    if info.is_pr {
-        if let Some(merge_sha) = &info.merge_commit_sha {
-            println!("{}", "✅ Merged:".green().bold());
-            println!("   {} {}", "Merge commit:".yellow(), merge_sha[..7].cyan());
-        } else {
-            println!(
-                "{}",
-                "❌ Not merged yet - still open or closed without merging"
-                    .yellow()
-                    .italic()
-            );
-        }
-        println!();
-    } else {
-        // For issues, show closing PRs and commits if any
-        if info.closing_prs.is_empty() && info.closing_commits.is_empty() {
-            println!(
-                "{}",
-                "🤷 No commits claimed to fix this... suspicious!"
-                    .yellow()
-                    .italic()
-            );
-        } else {
-            println!("{}", "✅ Closed by:".green().bold());
-
-            // Show closing PRs with links
-            if !info.closing_prs.is_empty() {
-                // Derive base URL from issue URL
-                // Issue URL format: https://github.com/owner/repo/issues/123
-                if let Some(base_url) = info.url.rsplit_once("/issues/").map(|(base, _)| base) {
-                    for pr_number in &info.closing_prs {
-                        println!(
-                            "   {} PR #{}",
-                            "🔀".yellow(),
-                            pr_number.to_string().as_str().cyan().bold()
-                        );
-                        let pr_url = format!("{base_url}/pull/{pr_number}");
-                        print_link(&pr_url);
-                    }
-                }
-            }
-
-            // Show closing commits
-            for commit in &info.closing_commits {
-                println!("   {} {}", "•".yellow(), commit[..7].cyan());
-            }
-        }
-        println!();
-    }
-
-    // Release info
-    display_release_info(release, None);
-}
-
-fn display_tag(info: crate::git::TagInfo, github_url: Option<String>) {
-    println!("{} {}", "🏷️  Found tag:".green().bold(), info.name.cyan());
-    println!();
-
-    if info.is_semver {
-        println!("   {} This looks like a release! 🎉", "✓".green());
-    } else {
-        println!("   {} Not a semver tag", "ℹ".blue());
-    }
-
-    println!();
-    println!("   {} {}", "Commit:".yellow(), info.commit_hash[..7].cyan());
-
-    if let Some(url) = github_url {
-        println!();
-        print_link(&url);
-    }
+    display_release_info(file_result.release, None);
 }
 
 fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option<&str>) {
@@ -284,7 +421,6 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
 
                 // Show published date if available
                 if let Some(published) = &tag.published_at {
-                    // Parse and format the date more nicely
                     if let Some(date_part) = published.split('T').next() {
                         println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
                     }
@@ -300,9 +436,8 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
 
                 // Build GitHub URLs if we have a commit URL
                 if let Some(url) = commit_url {
-                    // Extract owner/repo from commit URL
                     if let Some((base_url, _)) = url.rsplit_once("/commit/") {
-                        let tag_url = format!("{}/tree/{}", base_url, tag.name);
+                        let tag_url = format!("{base_url}/tree/{}", tag.name);
                         print_link(&tag_url);
                     }
                 }

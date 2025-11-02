@@ -8,19 +8,32 @@ pub struct GitHubClient {
     repo: String,
 }
 
+/// Information about a Pull Request
+#[derive(Debug, Clone)]
+pub struct PullRequestInfo {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: String,
+    pub url: String,
+    pub merge_commit_sha: Option<String>,
+    pub author: Option<String>,
+    pub author_url: Option<String>,
+    pub created_at: Option<String>, // When the PR was created
+}
+
+/// Information about an Issue
 #[derive(Debug, Clone)]
 pub struct IssueInfo {
     pub number: u64,
     pub title: String,
-    pub is_pr: bool,
-    #[allow(dead_code)] // Will be used when we implement issue state display
+    pub body: Option<String>,
     pub state: String,
     pub url: String,
-    pub closing_commits: Vec<String>,
-    pub closing_prs: Vec<u64>, // PR numbers that closed this issue
-    pub merge_commit_sha: Option<String>,
     pub author: Option<String>,
     pub author_url: Option<String>,
+    pub closing_prs: Vec<u64>,      // PR numbers that closed this issue
+    pub created_at: Option<String>, // When the issue was created
 }
 
 #[derive(Debug, Clone)]
@@ -81,138 +94,178 @@ impl GitHubClient {
         self.client.is_some()
     }
 
-    /// Try to fetch an issue or PR
-    pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
+    /// Try to fetch a PR
+    pub async fn fetch_pr(&self, number: u64) -> Option<PullRequestInfo> {
         let client = self.client.as_ref()?;
 
-        // Try as PR first to get merge commit
         if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(number).await {
             let author = pr.user.as_ref().map(|u| u.login.clone());
             let author_url = author.as_ref().map(|login| Self::profile_url(login));
+            let created_at = pr.created_at.map(|dt| dt.to_string());
 
-            return Some(IssueInfo {
+            return Some(PullRequestInfo {
                 number,
                 title: pr.title.unwrap_or_default(),
-                is_pr: true,
+                body: pr.body,
                 state: format!("{:?}", pr.state),
                 url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
-                closing_commits: Vec::new(),
-                closing_prs: Vec::new(),
                 merge_commit_sha: pr.merge_commit_sha,
                 author,
                 author_url,
-            });
-        }
-
-        // Fall back to issue API
-        if let Ok(issue) = client.issues(&self.owner, &self.repo).get(number).await {
-            let author = issue.user.login.clone();
-            let author_url = Some(Self::profile_url(&author));
-
-            // For issues (not PRs), try to find closing PRs via timeline
-            let (closing_commits, closing_prs) = self.find_closing_pr_commits(number).await;
-
-            return Some(IssueInfo {
-                number,
-                title: issue.title,
-                is_pr: issue.pull_request.is_some(),
-                state: format!("{:?}", issue.state),
-                url: issue.html_url.to_string(),
-                closing_commits,
-                closing_prs,
-                merge_commit_sha: None,
-                author: Some(author),
-                author_url,
+                created_at,
             });
         }
 
         None
     }
 
-    /// Find closing PR commits for an issue by examining timeline events
-    /// Returns (`commit_shas`, `pr_numbers`)
-    async fn find_closing_pr_commits(&self, issue_number: u64) -> (Vec<String>, Vec<u64>) {
+    /// Try to fetch an issue
+    pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
+        let client = self.client.as_ref()?;
+
+        if let Ok(issue) = client.issues(&self.owner, &self.repo).get(number).await {
+            // If it has a pull_request field, it's actually a PR - skip it
+            if issue.pull_request.is_some() {
+                return None;
+            }
+
+            let author = issue.user.login.clone();
+            let author_url = Some(Self::profile_url(&author));
+            let created_at = Some(issue.created_at.to_string());
+
+            // Find closing PRs via timeline
+            let closing_prs = self.find_closing_prs(number).await;
+
+            return Some(IssueInfo {
+                number,
+                title: issue.title,
+                body: issue.body,
+                state: format!("{:?}", issue.state),
+                url: issue.html_url.to_string(),
+                author: Some(author),
+                author_url,
+                closing_prs,
+                created_at,
+            });
+        }
+
+        None
+    }
+
+    /// Find closing PRs for an issue by examining timeline events
+    /// Returns list of PR numbers that closed this issue
+    async fn find_closing_prs(&self, issue_number: u64) -> Vec<u64> {
         let client = match self.client.as_ref() {
             Some(c) => c,
-            None => return (Vec::new(), Vec::new()),
+            None => return Vec::new(),
         };
 
-        let mut closing_commits = Vec::new();
         let mut closing_prs = Vec::new();
 
-        // Fetch timeline events for the issue
-        // Timeline events include "closed" events that may reference a PR
         let timeline_url = format!(
             "https://api.github.com/repos/{}/{}/issues/{}/timeline",
             self.owner, self.repo, issue_number
         );
 
-        // Use octocrab's raw API to fetch timeline (as it may not have full timeline support)
         if let Ok(events) = client
             .get::<serde_json::Value, _, _>(&timeline_url, None::<&()>)
             .await
         {
-            // Parse timeline events to find "closed" events with PR references
             if let Some(events_array) = events.as_array() {
                 for event in events_array {
-                    // Look for "closed" events with a source PR
-                    if let Some(event_type) = event.get("event").and_then(|v| v.as_str())
-                        && event_type == "closed"
-                    {
-                        // Check if there's a commit_id or source PR
-                        if let Some(commit_id) = event.get("commit_id").and_then(|v| v.as_str()) {
-                            closing_commits.push(commit_id.to_string());
-                        }
-                        // Also check for source.issue (cross-referenced PR)
+                    let event_type = event.get("event").and_then(|v| v.as_str());
+
+                    // "cross-referenced" events show PRs that reference this issue
+                    if matches!(event_type, Some("cross-referenced" | "referenced")) {
                         if let Some(source) = event.get("source")
                             && let Some(issue) = source.get("issue")
+                            && issue.get("pull_request").is_some()
                             && let Some(pr_number) =
                                 issue.get("number").and_then(serde_json::Value::as_u64)
+                            && !closing_prs.contains(&pr_number)
                         {
                             closing_prs.push(pr_number);
-                            // Fetch this PR to get its merge commit
-                            if let Ok(pr) =
-                                client.pulls(&self.owner, &self.repo).get(pr_number).await
-                                && let Some(merge_sha) = pr.merge_commit_sha
-                            {
-                                closing_commits.push(merge_sha);
-                            }
                         }
                     }
                 }
             }
-        } else {
-            // Timeline API might not be available or issue might not exist
-            // Return empty lists
         }
 
-        (closing_commits, closing_prs)
+        closing_prs
     }
 
     /// Fetch all releases from GitHub
     pub async fn fetch_releases(&self) -> Vec<ReleaseInfo> {
+        self.fetch_releases_since(None).await
+    }
+
+    /// Fetch releases from GitHub, optionally filtered by date
+    /// If `since_date` is provided, stop fetching releases older than this date
+    /// This significantly speeds up lookups for recent PRs/issues
+    pub async fn fetch_releases_since(&self, since_date: Option<&str>) -> Vec<ReleaseInfo> {
         let client = match self.client.as_ref() {
             Some(c) => c,
             None => return Vec::new(),
         };
 
         let mut releases = Vec::new();
+        let mut page_num = 1u32;
+        let per_page = 100u8; // Max allowed by GitHub API
 
-        if let Ok(page) = client
-            .repos(&self.owner, &self.repo)
-            .releases()
-            .list()
-            .send()
-            .await
-        {
+        // Parse the cutoff date if provided
+        let cutoff_timestamp = since_date.and_then(|date_str| {
+            chrono::DateTime::parse_from_rfc3339(date_str)
+                .ok()
+                .map(|dt| dt.timestamp())
+        });
+
+        loop {
+            let page_result = client
+                .repos(&self.owner, &self.repo)
+                .releases()
+                .list()
+                .per_page(per_page)
+                .page(page_num)
+                .send()
+                .await;
+
+            let page = match page_result {
+                Ok(p) => p,
+                Err(_) => break, // Stop on error
+            };
+
+            if page.items.is_empty() {
+                break; // No more pages
+            }
+
+            let mut should_stop = false;
+
             for release in page.items {
+                let published_at_str = release.published_at.map(|dt| dt.to_string());
+
+                // Check if this release is too old
+                if let Some(cutoff) = cutoff_timestamp {
+                    if let Some(pub_at) = &release.published_at {
+                        if pub_at.timestamp() < cutoff {
+                            should_stop = true;
+                            break; // Stop processing this page
+                        }
+                    }
+                }
+
                 releases.push(ReleaseInfo {
                     tag_name: release.tag_name,
                     name: release.name,
                     url: release.html_url.to_string(),
-                    published_at: release.published_at.map(|dt| dt.to_string()),
+                    published_at: published_at_str,
                 });
             }
+
+            if should_stop {
+                break; // Stop pagination
+            }
+
+            page_num += 1;
         }
 
         releases
