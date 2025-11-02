@@ -2,6 +2,8 @@
 
 A snarky but helpful CLI tool to identify git commits, issues, PRs and file changes, and tell you which release they shipped in. Because sometimes you just need to know what the git is going on!
 
+A totally vibe-coded tool, so do not blame me if it hurts your feelings. 😄
+
 ## Features
 
 - 🔍 **Smart Detection**: Automatically identifies what you're looking for (commit hash, issue/PR number, file path, or tag)
