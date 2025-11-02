@@ -2,6 +2,7 @@ use crate::error::{Result, WtgError};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{GitHubClient, IssueInfo, PullRequestInfo, ReleaseInfo};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// What the user entered to search for
 #[derive(Debug, Clone)]
@@ -49,11 +50,10 @@ pub enum IdentifiedThing {
     TagOnly(Box<TagInfo>, Option<String>), // Just a tag, no commit yet
 }
 
-#[allow(clippy::future_not_send, clippy::large_futures)]
 pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
     let github = git
         .github_remote()
-        .map(|(owner, repo)| GitHubClient::new(owner, repo));
+        .map(|(owner, repo)| Arc::new(GitHubClient::new(owner, repo)));
 
     // Try as commit hash first
     if let Some(commit_info) = git.find_commit(input) {
@@ -61,7 +61,7 @@ pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
             EntryPoint::Commit(input.to_string()),
             commit_info,
             &git,
-            github.as_ref(),
+            github.as_deref(),
         )
         .await);
     }
@@ -69,20 +69,20 @@ pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
     // Try as issue/PR number (if it's all digits or starts with #)
     let number_str = input.strip_prefix('#').unwrap_or(input);
     if let Ok(number) = number_str.parse::<u64>()
-        && let Some(result) = resolve_number(number, &git, github.as_ref()).await
+        && let Some(result) = Box::pin(resolve_number(number, &git, github.as_deref())).await
     {
         return Ok(result);
     }
 
     // Try as file path
     if let Some(file_info) = git.find_file(input) {
-        return Ok(resolve_file(file_info, &git, github.as_ref()).await);
+        return Ok(resolve_file(file_info, &git, github.as_deref()).await);
     }
 
     // Try as tag
     let tags = git.get_tags();
     if let Some(tag_info) = tags.iter().find(|t| t.name == input) {
-        let github_url = github.as_ref().map(|gh| gh.tag_url(&tag_info.name));
+        let github_url = github.as_deref().map(|gh| gh.tag_url(&tag_info.name));
         return Ok(IdentifiedThing::TagOnly(
             Box::new(tag_info.clone()),
             github_url,
@@ -94,7 +94,6 @@ pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
 }
 
 /// Resolve a commit to enriched info
-#[allow(clippy::future_not_send)]
 async fn resolve_commit(
     entry_point: EntryPoint,
     commit_info: CommitInfo,
@@ -124,7 +123,6 @@ async fn resolve_commit(
 }
 
 /// Resolve an issue/PR number
-#[allow(clippy::future_not_send, clippy::large_futures)]
 async fn resolve_number(
     number: u64,
     git: &GitRepo,
@@ -231,7 +229,6 @@ async fn resolve_number(
     None
 }
 
-#[allow(clippy::future_not_send)]
 async fn resolve_release_for_commit(
     git: &GitRepo,
     github: Option<&GitHubClient>,
@@ -381,7 +378,6 @@ fn pick_best_tag(candidates: &[TagCandidate]) -> Option<TagInfo> {
 }
 
 /// Resolve a file path
-#[allow(clippy::future_not_send)]
 async fn resolve_file(
     file_info: FileInfo,
     git: &GitRepo,

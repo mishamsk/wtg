@@ -1,10 +1,13 @@
 use crate::error::{Result, WtgError};
 use crate::github::ReleaseInfo;
 use git2::{Commit, Oid, Repository, Time};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct GitRepo {
-    repo: Repository,
+    repo: Arc<Mutex<Repository>>,
+    path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -62,75 +65,81 @@ impl GitRepo {
     /// Open the git repository from the current directory
     pub fn open() -> Result<Self> {
         let repo = Repository::discover(".").map_err(|_| WtgError::NotInGitRepo)?;
-        Ok(Self { repo })
+        let path = repo.path().to_path_buf();
+        Ok(Self {
+            repo: Arc::new(Mutex::new(repo)),
+            path,
+        })
     }
 
     /// Get the repository path
     #[must_use]
     pub fn path(&self) -> &Path {
-        self.repo.path()
+        &self.path
+    }
+
+    fn with_repo<T>(&self, f: impl FnOnce(&Repository) -> T) -> T {
+        let repo = self.repo.lock().expect("git repository mutex poisoned");
+        f(&repo)
     }
 
     /// Try to find a commit by hash (can be short or full)
     #[must_use]
     pub fn find_commit(&self, hash_str: &str) -> Option<CommitInfo> {
-        // Try to parse as OID
-        if let Ok(oid) = Oid::from_str(hash_str)
-            && let Ok(commit) = self.repo.find_commit(oid)
-        {
-            return Some(Self::commit_to_info(&commit));
-        }
+        self.with_repo(|repo| {
+            if let Ok(oid) = Oid::from_str(hash_str)
+                && let Ok(commit) = repo.find_commit(oid)
+            {
+                return Some(Self::commit_to_info(&commit));
+            }
 
-        // Try as short hash - iterate through all commits
-        if hash_str.len() >= 7
-            && let Ok(obj) = self.repo.revparse_single(hash_str)
-            && let Ok(commit) = obj.peel_to_commit()
-        {
-            return Some(Self::commit_to_info(&commit));
-        }
+            if hash_str.len() >= 7
+                && let Ok(obj) = repo.revparse_single(hash_str)
+                && let Ok(commit) = obj.peel_to_commit()
+            {
+                return Some(Self::commit_to_info(&commit));
+            }
 
-        None
+            None
+        })
     }
 
     /// Find a file in the repository
     #[must_use]
     pub fn find_file(&self, path: &str) -> Option<FileInfo> {
-        // Get the last commit that touched this file
-        // (checks both worktree and git history)
-        let mut revwalk = self.repo.revwalk().ok()?;
-        revwalk.push_head().ok()?;
+        self.with_repo(|repo| {
+            let mut revwalk = repo.revwalk().ok()?;
+            revwalk.push_head().ok()?;
 
-        for oid in revwalk {
-            let oid = oid.ok()?;
-            let commit = self.repo.find_commit(oid).ok()?;
+            for oid in revwalk {
+                let oid = oid.ok()?;
+                let commit = repo.find_commit(oid).ok()?;
 
-            // Check if this commit touched the file
-            if commit_touches_file(&commit, path) {
-                let commit_info = Self::commit_to_info(&commit);
+                if commit_touches_file(&commit, path) {
+                    let commit_info = Self::commit_to_info(&commit);
+                    let previous_authors = Self::get_previous_authors(repo, path, &commit, 4);
 
-                // Get previous authors (up to 4 more)
-                let previous_authors = self.get_previous_authors(path, &commit, 4);
-
-                return Some(FileInfo {
-                    path: path.to_string(),
-                    last_commit: commit_info,
-                    previous_authors,
-                });
+                    return Some(FileInfo {
+                        path: path.to_string(),
+                        last_commit: commit_info,
+                        previous_authors,
+                    });
+                }
             }
-        }
 
-        None
+            None
+        })
     }
 
     /// Get previous authors for a file (excluding the last commit)
     fn get_previous_authors(
-        &self,
+        repo: &Repository,
         path: &str,
         last_commit: &Commit,
         limit: usize,
     ) -> Vec<(String, String, String)> {
         let mut authors = Vec::new();
-        let Ok(mut revwalk) = self.repo.revwalk() else {
+        let Ok(mut revwalk) = repo.revwalk() else {
             return authors;
         };
 
@@ -147,11 +156,10 @@ impl GitRepo {
 
             let Ok(oid) = oid else { continue };
 
-            let Ok(commit) = self.repo.find_commit(oid) else {
+            let Ok(commit) = repo.find_commit(oid) else {
                 continue;
             };
 
-            // Skip until we pass the last commit
             if commit.id() == last_commit.id() {
                 found_last = true;
                 continue;
@@ -161,7 +169,6 @@ impl GitRepo {
                 continue;
             }
 
-            // Check if this commit touched the file
             if commit_touches_file(&commit, path) {
                 authors.push((
                     commit.id().to_string()[..7].to_string(),
@@ -183,49 +190,49 @@ impl GitRepo {
     /// Get all tags in the repository, enriched with GitHub release info
     #[must_use]
     pub fn get_tags_with_releases(&self, github_releases: &[ReleaseInfo]) -> Vec<TagInfo> {
-        let mut tags = Vec::new();
-
-        // Build a map of tag names from GitHub releases for quick lookup
         let release_map: std::collections::HashMap<String, &ReleaseInfo> = github_releases
             .iter()
             .map(|r| (r.tag_name.clone(), r))
             .collect();
 
-        if let Ok(tag_names) = self.repo.tag_names(None) {
-            for tag_name in tag_names.iter().flatten() {
-                if let Ok(obj) = self.repo.revparse_single(tag_name)
-                    && let Ok(commit) = obj.peel_to_commit()
-                {
-                    let semver_info = parse_semver(tag_name);
-                    let is_semver = semver_info.is_some();
+        self.with_repo(|repo| {
+            let mut tags = Vec::new();
 
-                    // Check if this tag is a GitHub release and populate metadata
-                    let (is_release, release_name, release_url, published_at) = release_map
-                        .get(tag_name)
-                        .map_or((false, None, None, None), |release| {
-                            (
-                                true,
-                                release.name.clone(),
-                                Some(release.url.clone()),
-                                release.published_at.clone(),
-                            )
+            if let Ok(tag_names) = repo.tag_names(None) {
+                for tag_name in tag_names.iter().flatten() {
+                    if let Ok(obj) = repo.revparse_single(tag_name)
+                        && let Ok(commit) = obj.peel_to_commit()
+                    {
+                        let semver_info = parse_semver(tag_name);
+                        let is_semver = semver_info.is_some();
+
+                        let (is_release, release_name, release_url, published_at) = release_map
+                            .get(tag_name)
+                            .map_or((false, None, None, None), |release| {
+                                (
+                                    true,
+                                    release.name.clone(),
+                                    Some(release.url.clone()),
+                                    release.published_at.clone(),
+                                )
+                            });
+
+                        tags.push(TagInfo {
+                            name: tag_name.to_string(),
+                            commit_hash: commit.id().to_string(),
+                            is_semver,
+                            semver_info,
+                            is_release,
+                            release_name,
+                            release_url,
+                            published_at,
                         });
-
-                    tags.push(TagInfo {
-                        name: tag_name.to_string(),
-                        commit_hash: commit.id().to_string(),
-                        is_semver,
-                        semver_info,
-                        is_release,
-                        release_name,
-                        release_url,
-                        published_at,
-                    });
+                    }
                 }
             }
-        }
 
-        tags
+            tags
+        })
     }
 
     /// Expose tags that contain the specified commit.
@@ -242,19 +249,21 @@ impl GitRepo {
     /// Convert a GitHub release into tag metadata if the tag exists locally.
     #[must_use]
     pub fn tag_from_release(&self, release: &ReleaseInfo) -> Option<TagInfo> {
-        let obj = self.repo.revparse_single(&release.tag_name).ok()?;
-        let commit = obj.peel_to_commit().ok()?;
-        let semver_info = parse_semver(&release.tag_name);
+        self.with_repo(|repo| {
+            let obj = repo.revparse_single(&release.tag_name).ok()?;
+            let commit = obj.peel_to_commit().ok()?;
+            let semver_info = parse_semver(&release.tag_name);
 
-        Some(TagInfo {
-            name: release.tag_name.clone(),
-            commit_hash: commit.id().to_string(),
-            is_semver: semver_info.is_some(),
-            semver_info,
-            is_release: true,
-            release_name: release.name.clone(),
-            release_url: Some(release.url.clone()),
-            published_at: release.published_at.clone(),
+            Some(TagInfo {
+                name: release.tag_name.clone(),
+                commit_hash: commit.id().to_string(),
+                is_semver: semver_info.is_some(),
+                semver_info,
+                is_release: true,
+                release_name: release.name.clone(),
+                release_url: Some(release.url.clone()),
+                published_at: release.published_at.clone(),
+            })
         })
     }
 
@@ -274,82 +283,89 @@ impl GitRepo {
     /// Find all tags that contain a given commit (git-only, no GitHub enrichment)
     /// Returns None if no tags contain the commit
     fn find_tags_containing_commit(&self, commit_oid: Oid) -> Option<Vec<TagInfo>> {
-        let mut containing_tags = Vec::new();
+        self.with_repo(|repo| {
+            let mut containing_tags = Vec::new();
 
-        let tag_names = self.repo.tag_names(None).ok()?;
+            let tag_names = repo.tag_names(None).ok()?;
 
-        for tag_name in tag_names.iter().flatten() {
-            if let Ok(obj) = self.repo.revparse_single(tag_name)
-                && let Ok(commit) = obj.peel_to_commit()
-            {
-                let tag_oid = commit.id();
+            for tag_name in tag_names.iter().flatten() {
+                if let Ok(obj) = repo.revparse_single(tag_name)
+                    && let Ok(commit) = obj.peel_to_commit()
+                {
+                    let tag_oid = commit.id();
 
-                // Check if commit is ancestor of tag (i.e., tag contains commit)
-                if self.is_ancestor(commit_oid, tag_oid) {
-                    let semver_info = parse_semver(tag_name);
+                    if repo
+                        .graph_descendant_of(tag_oid, commit_oid)
+                        .unwrap_or(false)
+                    {
+                        let semver_info = parse_semver(tag_name);
 
-                    containing_tags.push(TagInfo {
-                        name: tag_name.to_string(),
-                        commit_hash: tag_oid.to_string(),
-                        is_semver: semver_info.is_some(),
-                        semver_info,
-                        is_release: false,
-                        release_name: None,
-                        release_url: None,
-                        published_at: None,
-                    });
+                        containing_tags.push(TagInfo {
+                            name: tag_name.to_string(),
+                            commit_hash: tag_oid.to_string(),
+                            is_semver: semver_info.is_some(),
+                            semver_info,
+                            is_release: false,
+                            release_name: None,
+                            release_url: None,
+                            published_at: None,
+                        });
+                    }
                 }
             }
-        }
 
-        if containing_tags.is_empty() {
-            None
-        } else {
-            Some(containing_tags)
-        }
+            if containing_tags.is_empty() {
+                None
+            } else {
+                Some(containing_tags)
+            }
+        })
     }
 
     /// Get commit timestamp for sorting (helper)
     pub(crate) fn get_commit_timestamp(&self, commit_hash: &str) -> i64 {
-        Oid::from_str(commit_hash)
-            .and_then(|oid| self.repo.find_commit(oid))
-            .map(|c| c.time().seconds())
-            .unwrap_or(0)
+        self.with_repo(|repo| {
+            Oid::from_str(commit_hash)
+                .and_then(|oid| repo.find_commit(oid))
+                .map(|c| c.time().seconds())
+                .unwrap_or(0)
+        })
     }
 
     /// Check if commit1 is an ancestor of commit2
     fn is_ancestor(&self, ancestor: Oid, descendant: Oid) -> bool {
-        self.repo
-            .graph_descendant_of(descendant, ancestor)
-            .unwrap_or(false)
+        self.with_repo(|repo| {
+            repo.graph_descendant_of(descendant, ancestor)
+                .unwrap_or(false)
+        })
     }
 
     /// Get the GitHub remote URL if it exists (checks all remotes)
     #[must_use]
     pub fn github_remote(&self) -> Option<(String, String)> {
-        // Try common remote names first (origin, upstream)
-        for remote_name in ["origin", "upstream"] {
-            if let Ok(remote) = self.repo.find_remote(remote_name)
-                && let Some(url) = remote.url()
-                && let Some(github_info) = parse_github_url(url)
-            {
-                return Some(github_info);
-            }
-        }
-
-        // If not found in common names, check all remotes
-        if let Ok(remotes) = self.repo.remotes() {
-            for remote_name in remotes.iter().flatten() {
-                if let Ok(remote) = self.repo.find_remote(remote_name)
+        self.with_repo(|repo| {
+            for remote_name in ["origin", "upstream"] {
+                if let Ok(remote) = repo.find_remote(remote_name)
                     && let Some(url) = remote.url()
                     && let Some(github_info) = parse_github_url(url)
                 {
                     return Some(github_info);
                 }
             }
-        }
 
-        None
+            if let Ok(remotes) = repo.remotes() {
+                for remote_name in remotes.iter().flatten() {
+                    if let Ok(remote) = repo.find_remote(remote_name)
+                        && let Some(url) = remote.url()
+                        && let Some(github_info) = parse_github_url(url)
+                    {
+                        return Some(github_info);
+                    }
+                }
+            }
+
+            None
+        })
     }
 
     /// Convert a `git2::Commit` to `CommitInfo`

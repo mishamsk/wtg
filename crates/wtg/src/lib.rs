@@ -37,7 +37,6 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     runtime.block_on(run_async(cli))
 }
 
-#[allow(clippy::future_not_send, clippy::large_futures)]
 async fn run_async(cli: Cli) -> Result<()> {
     // Check git repo and remote status first
     let git_repo = git::GitRepo::open()?;
@@ -47,7 +46,7 @@ async fn run_async(cli: Cli) -> Result<()> {
     remote::check_remote_and_snark(remote_info, git_repo.path());
 
     // Detect what type of input we have
-    let result = identifier::identify(&cli.input, git_repo).await?;
+    let result = Box::pin(identifier::identify(&cli.input, git_repo)).await?;
 
     // Display the result
     output::display(result)?;
