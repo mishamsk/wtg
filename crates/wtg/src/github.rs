@@ -23,7 +23,6 @@ pub struct IssueInfo {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Will be used when we implement GitHub releases integration
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub name: Option<String>,
@@ -138,8 +137,7 @@ impl GitHubClient {
         None
     }
 
-    /// Fetch all releases
-    #[allow(dead_code)] // Will be used for release comparison with git tags
+    /// Fetch all releases from GitHub
     pub async fn fetch_releases(&self) -> Vec<ReleaseInfo> {
         let client = match self.client.as_ref() {
             Some(c) => c,
