@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.6,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "wtg-cli"
+dynamic = ["version"]
+description = "What The Git CLI – snarky Git history sleuth packaged for Python"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Mike Perlov" }]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+
+[project.scripts]
+wtg = "wtg_cli.cli:main"
+
+[tool.maturin]
+bindings = "pyo3"
+manifest-path = "crates/wtg-python/Cargo.toml"
+module-name = "wtg_cli._wtg"
+python-source = "src"

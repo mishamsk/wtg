@@ -13,6 +13,7 @@ pub enum WtgError {
     NetworkUnavailable,
     MultipleMatches(Vec<String>),
     Io(std::io::Error),
+    Cli { message: String, code: i32 },
 }
 
 impl fmt::Display for WtgError {
@@ -70,6 +71,7 @@ impl fmt::Display for WtgError {
                 panic!("💥 BOOM! You broke me!");
             }
             Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Cli { message, .. } => write!(f, "{message}"),
         }
     }
 }
@@ -91,5 +93,14 @@ impl From<octocrab::Error> for WtgError {
 impl From<std::io::Error> for WtgError {
     fn from(err: std::io::Error) -> Self {
         Self::Io(err)
+    }
+}
+
+impl WtgError {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Cli { code, .. } => *code,
+            _ => 1,
+        }
     }
 }

@@ -14,6 +14,35 @@ A snarky but helpful CLI tool to identify git commits, issues, PRs and file chan
 
 ## Installation
 
+### Recommended: Python package
+
+Run the CLI straight from PyPI without installing anything permanently:
+
+```bash
+uvx --from wtg-cli wtg --help
+```
+
+Or install it as a global tool (works on macOS, Linux, and Windows):
+
+```bash
+uv tool install wtg-cli
+wtg --help
+```
+
+`wtg-cli` is just a regular wheel, so it can also be installed with `pip`, `pipx`, or any other Python package manager.
+
+```bash
+pip install wtg-cli
+```
+
+Working from a local checkout? `uv run` will build the wheel in place and execute it:
+
+```bash
+uv run wtg --help
+```
+
+### Alternative: build from source
+
 ```bash
 cargo install --path crates/wtg
 ```

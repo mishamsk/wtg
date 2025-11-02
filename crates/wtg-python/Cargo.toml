@@ -1,0 +1,18 @@
+[package]
+name = "wtg-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "wtg_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { workspace = true }
+wtg = { workspace = true }
+
+[lints]
+workspace = true
