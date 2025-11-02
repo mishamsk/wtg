@@ -1,6 +1,7 @@
 import? '~/.justfile'
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set windows-shell := ["pwsh", "-NoLogo", "-Command"]
 
 # Show help (same as just running just)
 help:
