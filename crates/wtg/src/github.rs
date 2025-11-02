@@ -107,13 +107,16 @@ impl GitHubClient {
             let author = issue.user.login.clone();
             let author_url = Some(Self::profile_url(&author));
 
+            // For issues (not PRs), try to find closing PRs via timeline
+            let closing_commits = self.find_closing_pr_commits(number).await;
+
             return Some(IssueInfo {
                 number,
                 title: issue.title,
                 is_pr: issue.pull_request.is_some(),
                 state: format!("{:?}", issue.state),
                 url: issue.html_url.to_string(),
-                closing_commits: Vec::new(),
+                closing_commits,
                 merge_commit_sha: None,
                 author: Some(author),
                 author_url,
@@ -121,6 +124,62 @@ impl GitHubClient {
         }
 
         None
+    }
+
+    /// Find closing PR commits for an issue by examining timeline events
+    async fn find_closing_pr_commits(&self, issue_number: u64) -> Vec<String> {
+        let client = match self.client.as_ref() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        let mut closing_commits = Vec::new();
+
+        // Fetch timeline events for the issue
+        // Timeline events include "closed" events that may reference a PR
+        let timeline_url = format!(
+            "https://api.github.com/repos/{}/{}/issues/{}/timeline",
+            self.owner, self.repo, issue_number
+        );
+
+        // Use octocrab's raw API to fetch timeline (as it may not have full timeline support)
+        match client.get::<serde_json::Value, _, _>(&timeline_url, None::<&()>).await {
+            Ok(events) => {
+                // Parse timeline events to find "closed" events with PR references
+                if let Some(events_array) = events.as_array() {
+                    for event in events_array {
+                        // Look for "closed" events with a source PR
+                        if let Some(event_type) = event.get("event").and_then(|v| v.as_str()) {
+                            if event_type == "closed" {
+                                // Check if there's a commit_id or source PR
+                                if let Some(commit_id) = event.get("commit_id").and_then(|v| v.as_str()) {
+                                    closing_commits.push(commit_id.to_string());
+                                }
+                                // Also check for source.issue (cross-referenced PR)
+                                if let Some(source) = event.get("source") {
+                                    if let Some(issue) = source.get("issue") {
+                                        if let Some(pr_number) = issue.get("number").and_then(|v| v.as_u64()) {
+                                            // Fetch this PR to get its merge commit
+                                            if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(pr_number).await {
+                                                if let Some(merge_sha) = pr.merge_commit_sha {
+                                                    closing_commits.push(merge_sha);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // Timeline API might not be available or issue might not exist
+                // Return empty list
+            }
+        }
+
+        closing_commits
     }
 
     /// Fetch all releases from GitHub
