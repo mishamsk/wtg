@@ -30,11 +30,14 @@ where
 }
 
 fn run_with_cli(cli: Cli) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
 
-    runtime.block_on(async move { run_async(cli).await })
+    runtime.block_on(run_async(cli))
 }
 
+#[allow(clippy::future_not_send, clippy::large_futures)]
 async fn run_async(cli: Cli) -> Result<()> {
     // Check git repo and remote status first
     let git_repo = git::GitRepo::open()?;

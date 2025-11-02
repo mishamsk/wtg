@@ -78,7 +78,7 @@ impl GitRepo {
         if let Ok(oid) = Oid::from_str(hash_str)
             && let Ok(commit) = self.repo.find_commit(oid)
         {
-            return Some(self.commit_to_info(&commit));
+            return Some(Self::commit_to_info(&commit));
         }
 
         // Try as short hash - iterate through all commits
@@ -86,7 +86,7 @@ impl GitRepo {
             && let Ok(obj) = self.repo.revparse_single(hash_str)
             && let Ok(commit) = obj.peel_to_commit()
         {
-            return Some(self.commit_to_info(&commit));
+            return Some(Self::commit_to_info(&commit));
         }
 
         None
@@ -106,7 +106,7 @@ impl GitRepo {
 
             // Check if this commit touched the file
             if commit_touches_file(&commit, path) {
-                let commit_info = self.commit_to_info(&commit);
+                let commit_info = Self::commit_to_info(&commit);
 
                 // Get previous authors (up to 4 more)
                 let previous_authors = self.get_previous_authors(path, &commit, 4);
@@ -228,80 +228,47 @@ impl GitRepo {
         tags
     }
 
-    /// Find the closest release that contains a given commit
+    /// Expose tags that contain the specified commit.
     #[must_use]
-    pub fn find_closest_release(&self, commit_hash: &str) -> Option<TagInfo> {
-        self.find_closest_release_with_github(&[], commit_hash)
+    pub fn tags_containing_commit(&self, commit_hash: &str) -> Vec<TagInfo> {
+        let Ok(commit_oid) = Oid::from_str(commit_hash) else {
+            return Vec::new();
+        };
+
+        self.find_tags_containing_commit(commit_oid)
+            .unwrap_or_default()
     }
 
-    /// Find the closest release that contains a given commit, with GitHub releases prioritized
-    /// OPTIMIZED: Local git-first approach - only fetches GitHub data if tags are found
+    /// Convert a GitHub release into tag metadata if the tag exists locally.
     #[must_use]
-    pub fn find_closest_release_with_github(
-        &self,
-        github_releases: &[ReleaseInfo],
-        commit_hash: &str,
-    ) -> Option<TagInfo> {
-        let commit_oid = Oid::from_str(commit_hash).ok()?;
+    pub fn tag_from_release(&self, release: &ReleaseInfo) -> Option<TagInfo> {
+        let obj = self.repo.revparse_single(&release.tag_name).ok()?;
+        let commit = obj.peel_to_commit().ok()?;
+        let semver_info = parse_semver(&release.tag_name);
 
-        // PHASE 1: Find all tags containing this commit (git-only, no GitHub)
-        let containing_tags = self.find_tags_containing_commit(commit_oid)?;
+        Some(TagInfo {
+            name: release.tag_name.clone(),
+            commit_hash: commit.id().to_string(),
+            is_semver: semver_info.is_some(),
+            semver_info,
+            is_release: true,
+            release_name: release.name.clone(),
+            release_url: Some(release.url.clone()),
+            published_at: release.published_at.clone(),
+        })
+    }
 
-        // PHASE 2: Build release map ONLY for tags we found (lazy enrichment)
-        let release_map: std::collections::HashMap<String, &ReleaseInfo> = github_releases
-            .iter()
-            .filter(|r| containing_tags.iter().any(|t| t.name == r.tag_name))
-            .map(|r| (r.tag_name.clone(), r))
-            .collect();
+    /// Check whether a release tag contains the specified commit.
+    #[must_use]
+    pub fn tag_contains_commit(&self, tag_commit_hash: &str, commit_hash: &str) -> bool {
+        let Ok(tag_oid) = Oid::from_str(tag_commit_hash) else {
+            return false;
+        };
+        let Ok(commit_oid) = Oid::from_str(commit_hash) else {
+            return false;
+        };
 
-        // PHASE 3: Enrich only the tags we found
-        let enriched_tags: Vec<TagInfo> = containing_tags
-            .into_iter()
-            .map(|mut tag| {
-                if let Some(release) = release_map.get(&tag.name) {
-                    tag.is_release = true;
-                    tag.release_name = release.name.clone();
-                    tag.release_url = Some(release.url.clone());
-                    tag.published_at = release.published_at.clone();
-                }
-                tag
-            })
-            .collect();
-
-        // PHASE 4: Find best match with priority ordering and EARLY EXIT
-        // Priority 1: GitHub releases (semver)
-        if let Some(tag) = enriched_tags
-            .iter()
-            .filter(|t| t.is_release && t.is_semver)
-            .min_by_key(|t| self.get_commit_timestamp(&t.commit_hash))
-        {
-            return Some(tag.clone());
-        }
-
-        // Priority 2: Git tags (semver)
-        if let Some(tag) = enriched_tags
-            .iter()
-            .filter(|t| !t.is_release && t.is_semver)
-            .min_by_key(|t| self.get_commit_timestamp(&t.commit_hash))
-        {
-            return Some(tag.clone());
-        }
-
-        // Priority 3: Non-semver GitHub releases
-        if let Some(tag) = enriched_tags
-            .iter()
-            .filter(|t| t.is_release && !t.is_semver)
-            .min_by_key(|t| self.get_commit_timestamp(&t.commit_hash))
-        {
-            return Some(tag.clone());
-        }
-
-        // Priority 4: Non-semver git tags
-        enriched_tags
-            .iter()
-            .filter(|t| !t.is_release && !t.is_semver)
-            .min_by_key(|t| self.get_commit_timestamp(&t.commit_hash))
-            .cloned()
+        self.is_ancestor(commit_oid, tag_oid)
     }
 
     /// Find all tags that contain a given commit (git-only, no GitHub enrichment)
@@ -343,7 +310,7 @@ impl GitRepo {
     }
 
     /// Get commit timestamp for sorting (helper)
-    fn get_commit_timestamp(&self, commit_hash: &str) -> i64 {
+    pub(crate) fn get_commit_timestamp(&self, commit_hash: &str) -> i64 {
         Oid::from_str(commit_hash)
             .and_then(|oid| self.repo.find_commit(oid))
             .map(|c| c.time().seconds())
@@ -386,7 +353,7 @@ impl GitRepo {
     }
 
     /// Convert a `git2::Commit` to `CommitInfo`
-    fn commit_to_info(&self, commit: &Commit) -> CommitInfo {
+    fn commit_to_info(commit: &Commit) -> CommitInfo {
         let message = commit.message().unwrap_or("").to_string();
         let lines: Vec<&str> = message.lines().collect();
         let message_lines = lines.len();

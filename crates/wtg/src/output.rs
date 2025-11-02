@@ -4,9 +4,11 @@ use crossterm::style::Stylize;
 
 pub fn display(thing: IdentifiedThing) -> Result<()> {
     match thing {
-        IdentifiedThing::Enriched(info) => display_enriched(info),
-        IdentifiedThing::File(file_result) => display_file(file_result),
-        IdentifiedThing::TagOnly(tag_info, github_url) => display_tag_warning(tag_info, github_url),
+        IdentifiedThing::Enriched(info) => display_enriched(*info),
+        IdentifiedThing::File(file_result) => display_file(*file_result),
+        IdentifiedThing::TagOnly(tag_info, github_url) => {
+            display_tag_warning(*tag_info, github_url);
+        }
     }
 
     Ok(())
@@ -59,8 +61,8 @@ fn display_enriched(info: EnrichedInfo) {
             if let Some(commit) = &info.commit {
                 display_commit_section(
                     commit,
-                    &info.commit_url,
-                    &info.commit_author_github_url,
+                    info.commit_url.as_ref(),
+                    info.commit_author_github_url.as_ref(),
                     info.pr.as_ref(),
                 );
                 println!();
@@ -85,8 +87,8 @@ fn display_enriched(info: EnrichedInfo) {
             if let Some(commit) = &info.commit {
                 display_commit_section(
                     commit,
-                    &info.commit_url,
-                    &info.commit_author_github_url,
+                    info.commit_url.as_ref(),
+                    info.commit_author_github_url.as_ref(),
                     info.pr.as_ref(),
                 );
                 println!();
@@ -106,8 +108,8 @@ fn display_enriched(info: EnrichedInfo) {
             if let Some(commit) = &info.commit {
                 display_commit_section(
                     commit,
-                    &info.commit_url,
-                    &info.commit_author_github_url,
+                    info.commit_url.as_ref(),
+                    info.commit_author_github_url.as_ref(),
                     info.pr.as_ref(),
                 );
                 println!();
@@ -176,8 +178,8 @@ fn display_identification(entry_point: &EntryPoint) {
 /// Display commit information (the core section, always present when resolved)
 fn display_commit_section(
     commit: &crate::git::CommitInfo,
-    commit_url: &Option<String>,
-    author_url: &Option<String>,
+    commit_url: Option<&String>,
+    author_url: Option<&String>,
     pr: Option<&crate::github::PullRequestInfo>,
 ) {
     println!("{}", "💻 The Commit:".cyan().bold());
@@ -192,12 +194,12 @@ fn display_commit_section(
         "Who wrote this gem:",
         &commit.author_name,
         &commit.author_email,
-        author_url.as_deref(),
+        author_url.map(String::as_str),
     );
 
     // Show commit message if not a PR
     if pr.is_none() {
-        print_message_with_essay_joke(&commit.message, None, &commit.message_lines);
+        print_message_with_essay_joke(&commit.message, None, commit.message_lines);
     }
 
     println!("   {} {}", "📅".yellow(), commit.date.as_str().dark_grey());
@@ -227,7 +229,7 @@ fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
     }
 
     // PR description (overrides commit message)
-    print_message_with_essay_joke(&pr.title, pr.body.as_deref(), &pr.title.lines().count());
+    print_message_with_essay_joke(&pr.title, pr.body.as_deref(), pr.title.lines().count());
 
     // Merge status
     if let Some(merge_sha) = &pr.merge_commit_sha {
@@ -257,7 +259,7 @@ fn display_issue_section(issue: &crate::github::IssueInfo) {
     print_message_with_essay_joke(
         &issue.title,
         issue.body.as_deref(),
-        &issue.title.lines().count(),
+        issue.title.lines().count(),
     );
 
     print_link(&issue.url);
@@ -266,13 +268,21 @@ fn display_issue_section(issue: &crate::github::IssueInfo) {
 /// Display missing information (graceful degradation)
 fn display_missing_info(info: &EnrichedInfo) {
     // Issue without PR
-    if info.issue.is_some() && info.pr.is_none() {
-        println!(
-            "{}",
-            "🤷 No PR found for this issue... still open or closed without a fix?"
-                .yellow()
-                .italic()
-        );
+    if let Some(issue) = info.issue.as_ref()
+        && info.pr.is_none()
+    {
+        let message = if info.commit.is_none() {
+            if issue.state == octocrab::models::IssueState::Closed {
+                "🔍 Issue closed, but the trail's cold. Some stealthy hero dropped a fix and vanished without a PR."
+            } else {
+                "🔍 Couldn't trace this issue, still open. No one cares, probably!"
+            }
+        } else if issue.state == octocrab::models::IssueState::Closed {
+            "🤷 Issue closed, but no PR found... Some stealthy hero dropped a fix and vanished without a PR."
+        } else {
+            "🤷 No PR found for this issue... no one cares, probably!"
+        };
+        println!("{}", message.yellow().italic());
         println!();
     }
 
@@ -280,18 +290,7 @@ fn display_missing_info(info: &EnrichedInfo) {
     if info.pr.is_some() && info.commit.is_none() {
         println!(
             "{}",
-            "⏳ This PR hasn't been merged yet, so no commit to show."
-                .yellow()
-                .italic()
-        );
-        println!();
-    }
-
-    // Issue without commit (issue found, but no PR or not merged)
-    if info.issue.is_some() && info.commit.is_none() && info.pr.is_none() {
-        println!(
-            "{}",
-            "🔍 Couldn't trace this issue to a commit. Maybe it's still being worked on?"
+            "⏳ This PR hasn't been merged yet, too scared to commit!"
                 .yellow()
                 .italic()
         );
@@ -327,7 +326,7 @@ fn print_author_subsection(
 }
 
 /// Print a message/description with essay joke if it's long
-fn print_message_with_essay_joke(first_line: &str, full_text: Option<&str>, line_count: &usize) {
+fn print_message_with_essay_joke(first_line: &str, full_text: Option<&str>, line_count: usize) {
     println!("   {} {}", "📝".yellow(), first_line.white().bold());
 
     // Check if we should show the essay joke
@@ -335,8 +334,8 @@ fn print_message_with_essay_joke(first_line: &str, full_text: Option<&str>, line
         let char_count = text.len();
 
         // Show essay joke if >100 chars or multi-line
-        if char_count > 100 || *line_count > 1 {
-            let extra_lines = if *line_count > 1 { line_count - 1 } else { 0 };
+        if char_count > 100 || line_count > 1 {
+            let extra_lines = line_count.saturating_sub(1);
             let message = if extra_lines > 0 {
                 format!(
                     "Someone likes to write essays... {} more line{}",
@@ -420,10 +419,10 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
                 }
 
                 // Show published date if available
-                if let Some(published) = &tag.published_at {
-                    if let Some(date_part) = published.split('T').next() {
-                        println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
-                    }
+                if let Some(published) = &tag.published_at
+                    && let Some(date_part) = published.split('T').next()
+                {
+                    println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
                 }
 
                 // Use the release URL if available
@@ -435,11 +434,11 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
                 println!("   {} {}", "🏷️ ".yellow(), tag.name.as_str().cyan().bold());
 
                 // Build GitHub URLs if we have a commit URL
-                if let Some(url) = commit_url {
-                    if let Some((base_url, _)) = url.rsplit_once("/commit/") {
-                        let tag_url = format!("{base_url}/tree/{}", tag.name);
-                        print_link(&tag_url);
-                    }
+                if let Some(url) = commit_url
+                    && let Some((base_url, _)) = url.rsplit_once("/commit/")
+                {
+                    let tag_url = format!("{base_url}/tree/{}", tag.name);
+                    print_link(&tag_url);
                 }
             }
         }

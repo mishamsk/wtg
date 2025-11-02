@@ -11,10 +11,8 @@ clap = { workspace = true }
 git2 = { workspace = true }
 octocrab = { workspace = true }
 crossterm = { workspace = true }
-anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }

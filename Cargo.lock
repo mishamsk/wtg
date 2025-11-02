@@ -62,12 +62,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.100"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
-
-[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2217,7 +2211,6 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 name = "wtg"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "clap",
  "crossterm",
@@ -2225,7 +2218,6 @@ dependencies = [
  "git2",
  "octocrab",
  "serde",
- "serde_json",
  "serde_yaml",
  "tokio",
 ]

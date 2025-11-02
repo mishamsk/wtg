@@ -5,18 +5,18 @@ use wtg::run_with_args;
 
 /// Entry point used by the Python package to execute the CLI.
 #[pyfunction]
-fn run_cli(argv: Vec<String>) -> PyResult<i32> {
-    let args = if argv.is_empty() {
+fn run_cli(argv: Vec<String>) -> i32 {
+    let cli_args = if argv.is_empty() {
         vec!["wtg".to_string()]
     } else {
         argv
     };
 
-    match run_with_args(args) {
-        Ok(()) => Ok(0),
+    match run_with_args(cli_args) {
+        Ok(()) => 0,
         Err(err) => {
             eprintln!("{err}");
-            Ok(err.exit_code())
+            err.exit_code()
         }
     }
 }

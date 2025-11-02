@@ -1,5 +1,8 @@
-use octocrab::Octocrab;
-use serde::{Deserialize, Serialize};
+use octocrab::{
+    Octocrab,
+    models::{Event as TimelineEventType, timelines::TimelineEvent},
+};
+use serde::Deserialize;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
@@ -28,7 +31,7 @@ pub struct IssueInfo {
     pub number: u64,
     pub title: String,
     pub body: Option<String>,
-    pub state: String,
+    pub state: octocrab::models::IssueState,
     pub url: String,
     pub author: Option<String>,
     pub author_url: Option<String>,
@@ -46,6 +49,7 @@ pub struct ReleaseInfo {
 
 impl GitHubClient {
     /// Create a new GitHub client with authentication
+    #[must_use]
     pub fn new(owner: String, repo: String) -> Self {
         let client = Self::build_client();
 
@@ -159,7 +163,7 @@ impl GitHubClient {
                 number,
                 title: issue.title,
                 body: issue.body,
-                state: format!("{:?}", issue.state),
+                state: issue.state,
                 url: issue.html_url.to_string(),
                 author: Some(author),
                 author_url,
@@ -174,39 +178,45 @@ impl GitHubClient {
     /// Find closing PRs for an issue by examining timeline events
     /// Returns list of PR numbers that closed this issue
     async fn find_closing_prs(&self, issue_number: u64) -> Vec<u64> {
-        let client = match self.client.as_ref() {
-            Some(c) => c,
-            None => return Vec::new(),
+        let Some(client) = self.client.as_ref() else {
+            return Vec::new();
         };
 
         let mut closing_prs = Vec::new();
 
-        let timeline_url = format!(
-            "https://api.github.com/repos/{}/{}/issues/{}/timeline",
-            self.owner, self.repo, issue_number
-        );
-
-        if let Ok(events) = client
-            .get::<serde_json::Value, _, _>(&timeline_url, None::<&()>)
+        let Ok(mut page) = client
+            .issues(&self.owner, &self.repo)
+            .list_timeline_events(issue_number)
+            .per_page(100)
+            .send()
             .await
-        {
-            if let Some(events_array) = events.as_array() {
-                for event in events_array {
-                    let event_type = event.get("event").and_then(|v| v.as_str());
+        else {
+            return closing_prs;
+        };
 
-                    // "cross-referenced" events show PRs that reference this issue
-                    if matches!(event_type, Some("cross-referenced" | "referenced")) {
-                        if let Some(source) = event.get("source")
-                            && let Some(issue) = source.get("issue")
-                            && issue.get("pull_request").is_some()
-                            && let Some(pr_number) =
-                                issue.get("number").and_then(serde_json::Value::as_u64)
-                            && !closing_prs.contains(&pr_number)
-                        {
-                            closing_prs.push(pr_number);
-                        }
+        loop {
+            for event in &page.items {
+                if let Some(source) = event.source.as_ref()
+                    && matches!(
+                        event.event,
+                        TimelineEventType::CrossReferenced | TimelineEventType::Referenced
+                    )
+                {
+                    let issue = &source.issue;
+                    if issue.pull_request.is_some() && !closing_prs.contains(&issue.number) {
+                        closing_prs.push(issue.number);
                     }
                 }
+            }
+
+            match client
+                .get_page::<TimelineEvent>(&page.next)
+                .await
+                .ok()
+                .flatten()
+            {
+                Some(next_page) => page = next_page,
+                None => break,
             }
         }
 
@@ -222,9 +232,8 @@ impl GitHubClient {
     /// If `since_date` is provided, stop fetching releases older than this date
     /// This significantly speeds up lookups for recent PRs/issues
     pub async fn fetch_releases_since(&self, since_date: Option<&str>) -> Vec<ReleaseInfo> {
-        let client = match self.client.as_ref() {
-            Some(c) => c,
-            None => return Vec::new(),
+        let Some(client) = self.client.as_ref() else {
+            return Vec::new();
         };
 
         let mut releases = Vec::new();
@@ -248,9 +257,8 @@ impl GitHubClient {
                 .send()
                 .await;
 
-            let page = match page_result {
-                Ok(p) => p,
-                Err(_) => break, // Stop on error
+            let Ok(page) = page_result else {
+                break; // Stop on error
             };
 
             if page.items.is_empty() {
@@ -263,13 +271,12 @@ impl GitHubClient {
                 let published_at_str = release.published_at.map(|dt| dt.to_string());
 
                 // Check if this release is too old
-                if let Some(cutoff) = cutoff_timestamp {
-                    if let Some(pub_at) = &release.published_at {
-                        if pub_at.timestamp() < cutoff {
-                            should_stop = true;
-                            break; // Stop processing this page
-                        }
-                    }
+                if let Some(cutoff) = cutoff_timestamp
+                    && let Some(pub_at) = &release.published_at
+                    && pub_at.timestamp() < cutoff
+                {
+                    should_stop = true;
+                    break; // Stop processing this page
                 }
 
                 releases.push(ReleaseInfo {
@@ -288,6 +295,24 @@ impl GitHubClient {
         }
 
         releases
+    }
+
+    /// Fetch a GitHub release by tag.
+    pub async fn fetch_release_by_tag(&self, tag: &str) -> Option<ReleaseInfo> {
+        let client = self.client.as_ref()?;
+        let release = client
+            .repos(&self.owner, &self.repo)
+            .releases()
+            .get_by_tag(tag)
+            .await
+            .ok()?;
+
+        Some(ReleaseInfo {
+            tag_name: release.tag_name,
+            name: release.name,
+            url: release.html_url.to_string(),
+            published_at: release.published_at.map(|dt| dt.to_string()),
+        })
     }
 
     /// Build GitHub URLs for various things
@@ -313,6 +338,7 @@ impl GitHubClient {
         )
     }
 
+    #[must_use]
     pub fn profile_url(username: &str) -> String {
         format!("https://github.com/{username}")
     }
@@ -334,13 +360,13 @@ impl GitHubClient {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 struct GhConfig {
     #[serde(rename = "github.com")]
     github_com: GhHostConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 struct GhHostConfig {
     oauth_token: Option<String>,
 }

@@ -100,7 +100,7 @@ impl From<std::io::Error> for WtgError {
 }
 
 impl WtgError {
-    pub fn exit_code(&self) -> i32 {
+    pub const fn exit_code(&self) -> i32 {
         match self {
             Self::Cli { code, .. } => *code,
             _ => 1,
