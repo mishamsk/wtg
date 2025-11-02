@@ -143,9 +143,9 @@ async fn resolve_number(
             )
             .await;
 
+            let commit_date = commit_info.date_rfc3339();
             let release =
-                resolve_release_for_commit(git, Some(gh), merge_sha, pr_info.created_at.as_deref())
-                    .await;
+                resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date)).await;
 
             return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
                 entry_point: EntryPoint::PullRequestNumber(number),
@@ -185,13 +185,9 @@ async fn resolve_number(
                 )
                 .await;
 
-                let release = resolve_release_for_commit(
-                    git,
-                    Some(gh),
-                    merge_sha,
-                    issue_info.created_at.as_deref(),
-                )
-                .await;
+                let commit_date = commit_info.date_rfc3339();
+                let release =
+                    resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date)).await;
 
                 return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
                     entry_point: EntryPoint::IssueNumber(number),
