@@ -25,6 +25,12 @@ test:
 build:
     cargo build --bin wtg --all-targets --all-features
 
+build-release:
+    cargo build --bin wtg --release --all-features
+
+install:
+    cargo install --path crates/wtg --all-features --force
+
 check:
     cargo check --workspace --all-targets --all-features
 
