@@ -1,5 +1,5 @@
 use crate::error::{Result, WtgError};
-use git2::{Repository, Oid, Commit, Time};
+use git2::{Commit, Oid, Repository, Time};
 use std::path::Path;
 
 pub struct GitRepo {
@@ -58,19 +58,18 @@ impl GitRepo {
     /// Try to find a commit by hash (can be short or full)
     pub fn find_commit(&self, hash_str: &str) -> Option<CommitInfo> {
         // Try to parse as OID
-        if let Ok(oid) = Oid::from_str(hash_str) {
-            if let Ok(commit) = self.repo.find_commit(oid) {
-                return Some(self.commit_to_info(&commit));
-            }
+        if let Ok(oid) = Oid::from_str(hash_str)
+            && let Ok(commit) = self.repo.find_commit(oid)
+        {
+            return Some(self.commit_to_info(&commit));
         }
 
         // Try as short hash - iterate through all commits
-        if hash_str.len() >= 7 {
-            if let Ok(obj) = self.repo.revparse_single(hash_str) {
-                if let Ok(commit) = obj.peel_to_commit() {
-                    return Some(self.commit_to_info(&commit));
-                }
-            }
+        if hash_str.len() >= 7
+            && let Ok(obj) = self.repo.revparse_single(hash_str)
+            && let Ok(commit) = obj.peel_to_commit()
+        {
+            return Some(self.commit_to_info(&commit));
         }
 
         None
@@ -117,7 +116,12 @@ impl GitRepo {
     }
 
     /// Get previous authors for a file (excluding the last commit)
-    fn get_previous_authors(&self, path: &str, last_commit: &Commit, limit: usize) -> Vec<(String, String, String)> {
+    fn get_previous_authors(
+        &self,
+        path: &str,
+        last_commit: &Commit,
+        limit: usize,
+    ) -> Vec<(String, String, String)> {
         let mut authors = Vec::new();
         let mut revwalk = match self.repo.revwalk() {
             Ok(rw) => rw,
@@ -174,18 +178,18 @@ impl GitRepo {
 
         if let Ok(tag_names) = self.repo.tag_names(None) {
             for tag_name in tag_names.iter().flatten() {
-                if let Ok(obj) = self.repo.revparse_single(tag_name) {
-                    if let Ok(commit) = obj.peel_to_commit() {
-                        let semver_info = parse_semver(tag_name);
-                        let is_semver = semver_info.is_some();
-                        tags.push(TagInfo {
-                            name: tag_name.to_string(),
-                            commit_hash: commit.id().to_string(),
-                            is_semver,
-                            semver_info,
-                            is_release: false, // Git tags are not GitHub releases
-                        });
-                    }
+                if let Ok(obj) = self.repo.revparse_single(tag_name)
+                    && let Ok(commit) = obj.peel_to_commit()
+                {
+                    let semver_info = parse_semver(tag_name);
+                    let is_semver = semver_info.is_some();
+                    tags.push(TagInfo {
+                        name: tag_name.to_string(),
+                        commit_hash: commit.id().to_string(),
+                        is_semver,
+                        semver_info,
+                        is_release: false, // Git tags are not GitHub releases
+                    });
                 }
             }
         }
@@ -199,19 +203,14 @@ impl GitRepo {
         let all_tags = self.get_tags();
 
         // First try: Find semver tags that contain this commit
-        let semver_tags: Vec<_> = all_tags.iter()
-            .filter(|t| t.is_semver)
-            .cloned()
-            .collect();
+        let semver_tags: Vec<_> = all_tags.iter().filter(|t| t.is_semver).cloned().collect();
 
         if let Some(tag) = self.find_containing_tag(commit_oid, semver_tags) {
             return Some(tag);
         }
 
         // Fallback: If no semver tag found, try nearest ancestor non-semver tag
-        let non_semver_tags: Vec<_> = all_tags.into_iter()
-            .filter(|t| !t.is_semver)
-            .collect();
+        let non_semver_tags: Vec<_> = all_tags.into_iter().filter(|t| !t.is_semver).collect();
 
         self.find_containing_tag(commit_oid, non_semver_tags)
     }
@@ -246,31 +245,31 @@ impl GitRepo {
 
     /// Check if commit1 is an ancestor of commit2
     fn is_ancestor(&self, ancestor: Oid, descendant: Oid) -> bool {
-        self.repo.graph_descendant_of(descendant, ancestor).unwrap_or(false)
+        self.repo
+            .graph_descendant_of(descendant, ancestor)
+            .unwrap_or(false)
     }
 
     /// Get the GitHub remote URL if it exists (checks all remotes)
     pub fn github_remote(&self) -> Option<(String, String)> {
         // Try common remote names first (origin, upstream)
         for remote_name in ["origin", "upstream"] {
-            if let Ok(remote) = self.repo.find_remote(remote_name) {
-                if let Some(url) = remote.url() {
-                    if let Some(github_info) = parse_github_url(url) {
-                        return Some(github_info);
-                    }
-                }
+            if let Ok(remote) = self.repo.find_remote(remote_name)
+                && let Some(url) = remote.url()
+                && let Some(github_info) = parse_github_url(url)
+            {
+                return Some(github_info);
             }
         }
 
         // If not found in common names, check all remotes
         if let Ok(remotes) = self.repo.remotes() {
             for remote_name in remotes.iter().flatten() {
-                if let Ok(remote) = self.repo.find_remote(remote_name) {
-                    if let Some(url) = remote.url() {
-                        if let Some(github_info) = parse_github_url(url) {
-                            return Some(github_info);
-                        }
-                    }
+                if let Ok(remote) = self.repo.find_remote(remote_name)
+                    && let Some(url) = remote.url()
+                    && let Some(github_info) = parse_github_url(url)
+                {
+                    return Some(github_info);
                 }
             }
         }
@@ -278,7 +277,7 @@ impl GitRepo {
         None
     }
 
-    /// Convert a git2::Commit to CommitInfo
+    /// Convert a `git2::Commit` to `CommitInfo`
     fn commit_to_info(&self, commit: &Commit) -> CommitInfo {
         let message = commit.message().unwrap_or("").to_string();
         let lines: Vec<&str> = message.lines().collect();
@@ -287,7 +286,7 @@ impl GitRepo {
         CommitInfo {
             hash: commit.id().to_string(),
             short_hash: commit.id().to_string()[..7].to_string(),
-            message: lines.first().unwrap_or(&"").to_string(),
+            message: (*lines.first().unwrap_or(&"")).to_string(),
             message_lines,
             author_name: commit.author().name().unwrap_or("Unknown").to_string(),
             author_email: commit.author().email().unwrap_or("").to_string(),
@@ -405,7 +404,7 @@ fn parse_github_url(url: &str) -> Option<(String, String)> {
 
 /// Format git time to a human-readable string
 fn format_git_time(time: &Time) -> String {
-    use chrono::{DateTime, Utc, TimeZone};
+    use chrono::{DateTime, TimeZone, Utc};
 
     let datetime: DateTime<Utc> = Utc.timestamp_opt(time.seconds(), 0).unwrap();
     datetime.format("%Y-%m-%d %H:%M:%S").to_string()

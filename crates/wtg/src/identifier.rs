@@ -64,32 +64,28 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
 
     // Try as issue/PR number (if it's all digits or starts with #)
     let issue_number = input.strip_prefix('#').unwrap_or(input);
-    if let Ok(number) = issue_number.parse::<u64>() {
-        if let Some(gh) = &github {
-            // Try to fetch, but handle network errors gracefully
-            match gh.fetch_issue(number).await {
-                Some(issue_info) => {
-                    matches.push("issue/PR");
+    if let Ok(number) = issue_number.parse::<u64>()
+        && let Some(gh) = &github
+    {
+        // Try to fetch, but handle network errors gracefully
+        if let Some(issue_info) = gh.fetch_issue(number).await {
+            matches.push("issue/PR");
 
-                    // For PRs, find release using merge commit SHA
-                    let release = if let Some(merge_sha) = &issue_info.merge_commit_sha {
-                        git.find_closest_release(merge_sha)
-                    } else {
-                        // For issues, try to find commits that mention this issue
-                        // TODO: Parse commit messages for "closes #123" patterns
-                        None
-                    };
+            // For PRs, find release using merge commit SHA
+            let release = if let Some(merge_sha) = &issue_info.merge_commit_sha {
+                git.find_closest_release(merge_sha)
+            } else {
+                // For issues, try to find commits that mention this issue
+                // TODO: Parse commit messages for "closes #123" patterns
+                None
+            };
 
-                    return Ok(IdentifiedThing::Issue {
-                        info: issue_info,
-                        release,
-                    });
-                }
-                None => {
-                    // Might be network issue, continue trying other things
-                }
-            }
+            return Ok(IdentifiedThing::Issue {
+                info: issue_info,
+                release,
+            });
         }
+        // Might be network issue, continue trying other things
     }
 
     // Try as file path
@@ -126,11 +122,7 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
     if let Some(tag_info) = tags.iter().find(|t| t.name == input) {
         matches.push("tag");
 
-        let github_url = if let Some(gh) = &github {
-            Some(gh.tag_url(&tag_info.name))
-        } else {
-            None
-        };
+        let github_url = github.as_ref().map(|gh| gh.tag_url(&tag_info.name));
 
         return Ok(IdentifiedThing::Tag {
             info: tag_info.clone(),
@@ -141,7 +133,7 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
     // Easter egg: if we somehow matched multiple things (shouldn't happen)
     if matches.len() > 1 {
         return Err(WtgError::MultipleMatches(
-            matches.iter().map(|s| s.to_string()).collect(),
+            matches.iter().map(|s| (*s).to_string()).collect(),
         ));
     }
 
@@ -157,7 +149,7 @@ fn extract_github_username(email: &str) -> Option<String> {
         let parts: Vec<&str> = email.split('@').collect();
         if let Some(user_part) = parts.first() {
             // Handle both formats
-            if let Some(username) = user_part.split('+').last() {
+            if let Some(username) = user_part.split('+').next_back() {
                 return Some(username.to_string());
             }
         }

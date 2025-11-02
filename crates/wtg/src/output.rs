@@ -74,7 +74,11 @@ fn display_commit(
     github_url: Option<String>,
     author_url: Option<String>,
 ) {
-    println!("{} {}", "🔍 Found commit:".green().bold(), info.short_hash.cyan());
+    println!(
+        "{} {}",
+        "🔍 Found commit:".green().bold(),
+        info.short_hash.cyan()
+    );
     println!();
 
     // Commit message
@@ -141,10 +145,15 @@ fn display_file(
         println!("{}", "📜 Previous blame (up to 4):".yellow().bold());
 
         for (idx, (hash, name, _email)) in info.previous_authors.iter().enumerate() {
-            print!("   {}. {} - {}", idx + 1, hash.as_str().cyan(), name.as_str().cyan());
+            print!(
+                "   {}. {} - {}",
+                idx + 1,
+                hash.as_str().cyan(),
+                name.as_str().cyan()
+            );
 
             if let Some(Some(url)) = author_urls.get(idx) {
-                print!(" {}", format!("({})", url).blue().underlined());
+                print!(" {}", format!("({url})").blue().underlined());
             }
 
             println!();
@@ -163,7 +172,7 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
 
     println!(
         "{} #{}: {}",
-        format!("{} Found {}", emoji, type_str).green().bold(),
+        format!("{emoji} Found {type_str}").green().bold(),
         info.number.to_string().cyan(),
         info.title.white().bold()
     );
@@ -173,7 +182,7 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
     if let Some(author) = &info.author {
         print!("   {} {}", "👤".yellow(), author.as_str().cyan());
         if let Some(url) = &info.author_url {
-            print!(" {}", format!("({})", url).blue().underlined());
+            print!(" {}", format!("({url})").blue().underlined());
         }
         println!();
     }
@@ -189,7 +198,9 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
         } else {
             println!(
                 "{}",
-                "❌ Not merged yet - still open or closed without merging".yellow().italic()
+                "❌ Not merged yet - still open or closed without merging"
+                    .yellow()
+                    .italic()
             );
         }
         println!();
@@ -198,7 +209,9 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
         if info.closing_commits.is_empty() {
             println!(
                 "{}",
-                "🤷 No commits claimed to fix this... suspicious!".yellow().italic()
+                "🤷 No commits claimed to fix this... suspicious!"
+                    .yellow()
+                    .italic()
             );
         } else {
             println!("{}", "✅ Closed by:".green().bold());
@@ -251,7 +264,9 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
         None => {
             println!(
                 "   {}",
-                "🔥 Not shipped yet, still cooking in main!".yellow().italic()
+                "🔥 Not shipped yet, still cooking in main!"
+                    .yellow()
+                    .italic()
             );
         }
     }

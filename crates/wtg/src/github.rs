@@ -46,18 +46,12 @@ impl GitHubClient {
     fn build_client() -> Option<Octocrab> {
         // Try GITHUB_TOKEN env var first
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-            return Octocrab::builder()
-                .personal_token(token)
-                .build()
-                .ok();
+            return Octocrab::builder().personal_token(token).build().ok();
         }
 
         // Try reading from gh CLI config
         if let Some(token) = Self::read_gh_config() {
-            return Octocrab::builder()
-                .personal_token(token)
-                .build()
-                .ok();
+            return Octocrab::builder().personal_token(token).build().ok();
         }
 
         // Fall back to anonymous
@@ -82,7 +76,7 @@ impl GitHubClient {
 
     /// Check if client is available
     #[allow(dead_code)] // Will be used for network availability checks
-    pub fn is_available(&self) -> bool {
+    pub const fn is_available(&self) -> bool {
         self.client.is_some()
     }
 
@@ -91,11 +85,7 @@ impl GitHubClient {
         let client = self.client.as_ref()?;
 
         // Try as PR first to get merge commit
-        if let Ok(pr) = client
-            .pulls(&self.owner, &self.repo)
-            .get(number)
-            .await
-        {
+        if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(number).await {
             let author = pr.user.as_ref().map(|u| u.login.clone());
             let author_url = author.as_ref().map(|login| Self::profile_url(login));
 
@@ -113,11 +103,7 @@ impl GitHubClient {
         }
 
         // Fall back to issue API
-        if let Ok(issue) = client
-            .issues(&self.owner, &self.repo)
-            .get(number)
-            .await
-        {
+        if let Ok(issue) = client.issues(&self.owner, &self.repo).get(number).await {
             let author = issue.user.login.clone();
             let author_url = Some(Self::profile_url(&author));
 
@@ -146,24 +132,21 @@ impl GitHubClient {
 
         let mut releases = Vec::new();
 
-        match client
+        if let Ok(page) = client
             .repos(&self.owner, &self.repo)
             .releases()
             .list()
             .send()
             .await
         {
-            Ok(page) => {
-                for release in page.items {
-                    releases.push(ReleaseInfo {
-                        tag_name: release.tag_name,
-                        name: release.name,
-                        url: release.html_url.to_string(),
-                        published_at: release.published_at.map(|dt| dt.to_string()),
-                    });
-                }
+            for release in page.items {
+                releases.push(ReleaseInfo {
+                    tag_name: release.tag_name,
+                    name: release.name,
+                    url: release.html_url.to_string(),
+                    published_at: release.published_at.map(|dt| dt.to_string()),
+                });
             }
-            Err(_) => {}
         }
 
         releases
@@ -193,7 +176,7 @@ impl GitHubClient {
     }
 
     pub fn profile_url(username: &str) -> String {
-        format!("https://github.com/{}", username)
+        format!("https://github.com/{username}")
     }
 
     #[allow(dead_code)] // Will be used for issue link generation
