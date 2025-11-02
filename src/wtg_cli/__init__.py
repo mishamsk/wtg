@@ -6,7 +6,9 @@ from .cli import main, run
 
 try:
     __version__ = _metadata.version("wtg-cli")
-except _metadata.PackageNotFoundError:  # pragma: no cover - fallback for editable installs
+except (
+    _metadata.PackageNotFoundError
+):  # pragma: no cover - fallback for editable installs
     __version__ = "0.0.0"
 
 __all__ = ["main", "run", "__version__"]

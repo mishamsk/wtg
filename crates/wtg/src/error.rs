@@ -13,7 +13,10 @@ pub enum WtgError {
     NetworkUnavailable,
     MultipleMatches(Vec<String>),
     Io(std::io::Error),
-    Cli { message: String, code: i32 },
+    Cli {
+        message: String,
+        code: i32,
+    },
 }
 
 impl fmt::Display for WtgError {
