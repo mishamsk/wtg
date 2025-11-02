@@ -196,17 +196,31 @@ impl GitRepo {
     /// Find the closest release that contains a given commit
     pub fn find_closest_release(&self, commit_hash: &str) -> Option<TagInfo> {
         let commit_oid = Oid::from_str(commit_hash).ok()?;
-        let tags = self.get_tags();
+        let all_tags = self.get_tags();
 
-        // Filter to only semver tags for releases
-        let release_tags: Vec<_> = tags.into_iter()
+        // First try: Find semver tags that contain this commit
+        let semver_tags: Vec<_> = all_tags.iter()
             .filter(|t| t.is_semver)
+            .cloned()
             .collect();
 
-        // Find tags that contain this commit
+        if let Some(tag) = self.find_containing_tag(commit_oid, semver_tags) {
+            return Some(tag);
+        }
+
+        // Fallback: If no semver tag found, try nearest ancestor non-semver tag
+        let non_semver_tags: Vec<_> = all_tags.into_iter()
+            .filter(|t| !t.is_semver)
+            .collect();
+
+        self.find_containing_tag(commit_oid, non_semver_tags)
+    }
+
+    /// Find the oldest tag that contains the given commit
+    fn find_containing_tag(&self, commit_oid: Oid, tags: Vec<TagInfo>) -> Option<TagInfo> {
         let mut containing_tags = Vec::new();
 
-        for tag in release_tags {
+        for tag in tags {
             let tag_oid = Oid::from_str(&tag.commit_hash).ok()?;
 
             // Check if commit is ancestor of tag (i.e., tag contains commit)
