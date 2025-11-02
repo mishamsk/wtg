@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+clap = { workspace = true }
+git2 = { workspace = true }
+octocrab = { workspace = true }
+ratatui = { workspace = true }
 
 [lints]
 workspace = true

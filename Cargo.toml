@@ -21,3 +21,7 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
 [workspace.dependencies]
+clap = { version = "4.5.51", features = ["derive", "env", "unicode", "wrap_help"] }
+git2 = "0.20.2"
+octocrab = "0.47.0"
+ratatui = "0.29.0"
