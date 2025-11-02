@@ -31,6 +31,16 @@ pub struct TagInfo {
     pub is_semver: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemverInfo {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: Option<u32>,
+    pub build: Option<u32>,
+    pub pre_release: Option<String>,
+    pub build_metadata: Option<String>,
+}
+
 impl GitRepo {
     /// Open the git repository from the current directory
     pub fn open() -> Result<Self> {
@@ -267,17 +277,85 @@ impl GitRepo {
     }
 }
 
-/// Check if a tag name is a semantic version
-fn is_semver_tag(tag: &str) -> bool {
+/// Parse a semantic version string
+/// Supports:
+/// - 2-part: 1.0
+/// - 3-part: 1.2.3
+/// - 4-part: 1.2.3.4
+/// - Pre-release: 1.0.0-alpha, 1.0.0-rc.1
+/// - Build metadata: 1.0.0+build.123
+/// - With or without 'v' prefix
+fn parse_semver(tag: &str) -> Option<SemverInfo> {
+    // Strip 'v' prefix if present
     let tag = tag.strip_prefix('v').unwrap_or(tag);
 
-    // Simple semver check: X.Y.Z pattern
-    let parts: Vec<&str> = tag.split('.').collect();
-    if parts.len() != 3 {
-        return false;
-    }
+    // Split by '+' for build metadata
+    let (version_part, build_metadata) = if let Some((ver, meta)) = tag.split_once('+') {
+        (ver, Some(meta.to_string()))
+    } else {
+        (tag, None)
+    };
 
-    parts.iter().all(|p| p.parse::<u32>().is_ok())
+    // Split by '-' for pre-release
+    let (numeric_part, pre_release) = if let Some((num, pre)) = version_part.split_once('-') {
+        (num, Some(pre.to_string()))
+    } else {
+        (version_part, None)
+    };
+
+    // Parse numeric parts separated by '.'
+    let parts: Vec<&str> = numeric_part.split('.').collect();
+
+    match parts.len() {
+        2 => {
+            // X.Y
+            let major = parts[0].parse::<u32>().ok()?;
+            let minor = parts[1].parse::<u32>().ok()?;
+            Some(SemverInfo {
+                major,
+                minor,
+                patch: None,
+                build: None,
+                pre_release,
+                build_metadata,
+            })
+        }
+        3 => {
+            // X.Y.Z
+            let major = parts[0].parse::<u32>().ok()?;
+            let minor = parts[1].parse::<u32>().ok()?;
+            let patch = parts[2].parse::<u32>().ok()?;
+            Some(SemverInfo {
+                major,
+                minor,
+                patch: Some(patch),
+                build: None,
+                pre_release,
+                build_metadata,
+            })
+        }
+        4 => {
+            // X.Y.Z.W
+            let major = parts[0].parse::<u32>().ok()?;
+            let minor = parts[1].parse::<u32>().ok()?;
+            let patch = parts[2].parse::<u32>().ok()?;
+            let build = parts[3].parse::<u32>().ok()?;
+            Some(SemverInfo {
+                major,
+                minor,
+                patch: Some(patch),
+                build: Some(build),
+                pre_release,
+                build_metadata,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Check if a tag name is a semantic version
+fn is_semver_tag(tag: &str) -> bool {
+    parse_semver(tag).is_some()
 }
 
 /// Parse a GitHub URL to extract owner and repo
@@ -311,4 +389,149 @@ fn format_git_time(time: &Time) -> String {
 
     let datetime: DateTime<Utc> = Utc.timestamp_opt(time.seconds(), 0).unwrap();
     datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_semver_2_part() {
+        let result = parse_semver("1.0");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, None);
+        assert_eq!(semver.build, None);
+    }
+
+    #[test]
+    fn test_parse_semver_2_part_with_v_prefix() {
+        let result = parse_semver("v2.1");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 2);
+        assert_eq!(semver.minor, 1);
+    }
+
+    #[test]
+    fn test_parse_semver_3_part() {
+        let result = parse_semver("1.2.3");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 2);
+        assert_eq!(semver.patch, Some(3));
+        assert_eq!(semver.build, None);
+    }
+
+    #[test]
+    fn test_parse_semver_3_part_with_v_prefix() {
+        let result = parse_semver("v1.2.3");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 2);
+        assert_eq!(semver.patch, Some(3));
+    }
+
+    #[test]
+    fn test_parse_semver_4_part() {
+        let result = parse_semver("1.2.3.4");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 2);
+        assert_eq!(semver.patch, Some(3));
+        assert_eq!(semver.build, Some(4));
+    }
+
+    #[test]
+    fn test_parse_semver_with_pre_release() {
+        let result = parse_semver("1.0.0-alpha");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("alpha".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semver_with_pre_release_numeric() {
+        let result = parse_semver("v2.0.0-rc.1");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 2);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("rc.1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semver_with_build_metadata() {
+        let result = parse_semver("1.0.0+build.123");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.build_metadata, Some("build.123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semver_with_pre_release_and_build() {
+        let result = parse_semver("v1.0.0-beta.2+20130313144700");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("beta.2".to_string()));
+        assert_eq!(semver.build_metadata, Some("20130313144700".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semver_2_part_with_pre_release() {
+        let result = parse_semver("2.0-alpha");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 2);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, None);
+        assert_eq!(semver.pre_release, Some("alpha".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semver_invalid_single_part() {
+        assert!(parse_semver("1").is_none());
+    }
+
+    #[test]
+    fn test_parse_semver_invalid_non_numeric() {
+        assert!(parse_semver("abc.def").is_none());
+        assert!(parse_semver("1.x.3").is_none());
+    }
+
+    #[test]
+    fn test_parse_semver_invalid_too_many_parts() {
+        assert!(parse_semver("1.2.3.4.5").is_none());
+    }
+
+    #[test]
+    fn test_is_semver_tag() {
+        assert!(is_semver_tag("1.0"));
+        assert!(is_semver_tag("v1.0"));
+        assert!(is_semver_tag("1.2.3"));
+        assert!(is_semver_tag("v1.2.3"));
+        assert!(is_semver_tag("1.2.3.4"));
+        assert!(is_semver_tag("1.0.0-alpha"));
+        assert!(is_semver_tag("v2.0.0-rc.1"));
+        assert!(is_semver_tag("1.0.0+build"));
+
+        assert!(!is_semver_tag("v1"));
+        assert!(!is_semver_tag("abc"));
+        assert!(!is_semver_tag("1.2.3.4.5"));
+    }
 }
