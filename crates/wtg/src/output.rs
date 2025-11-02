@@ -250,14 +250,42 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
 
     match release {
         Some(tag) => {
-            println!("   {} {}", "🏷️ ".yellow(), tag.name.as_str().cyan().bold());
+            // Display tag name (or release name if it's a GitHub release)
+            if tag.is_release {
+                if let Some(release_name) = &tag.release_name {
+                    println!(
+                        "   {} {} {}",
+                        "🎉".yellow(),
+                        release_name.as_str().cyan().bold(),
+                        format!("({})", tag.name).as_str().dark_grey()
+                    );
+                } else {
+                    println!("   {} {}", "🎉".yellow(), tag.name.as_str().cyan().bold());
+                }
 
-            // Build GitHub URLs if we have a commit URL
-            if let Some(url) = commit_url {
-                // Extract owner/repo from commit URL
-                if let Some((base_url, _)) = url.rsplit_once("/commit/") {
-                    let release_url = format!("{}/releases/tag/{}", base_url, tag.name);
-                    print_link(&release_url);
+                // Show published date if available
+                if let Some(published) = &tag.published_at {
+                    // Parse and format the date more nicely
+                    if let Some(date_part) = published.split('T').next() {
+                        println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
+                    }
+                }
+
+                // Use the release URL if available
+                if let Some(url) = &tag.release_url {
+                    print_link(url);
+                }
+            } else {
+                // Plain git tag
+                println!("   {} {}", "🏷️ ".yellow(), tag.name.as_str().cyan().bold());
+
+                // Build GitHub URLs if we have a commit URL
+                if let Some(url) = commit_url {
+                    // Extract owner/repo from commit URL
+                    if let Some((base_url, _)) = url.rsplit_once("/commit/") {
+                        let tag_url = format!("{}/tree/{}", base_url, tag.name);
+                        print_link(&tag_url);
+                    }
                 }
             }
         }

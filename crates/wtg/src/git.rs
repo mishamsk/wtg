@@ -32,6 +32,9 @@ pub struct TagInfo {
     pub is_semver: bool,
     pub semver_info: Option<SemverInfo>,
     pub is_release: bool, // Whether this is a GitHub release
+    pub release_name: Option<String>, // GitHub release name (if is_release)
+    pub release_url: Option<String>, // GitHub release URL (if is_release)
+    pub published_at: Option<String>, // GitHub release published date (if is_release)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +198,19 @@ impl GitRepo {
                 {
                     let semver_info = parse_semver(tag_name);
                     let is_semver = semver_info.is_some();
-                    let is_release = release_map.contains_key(tag_name);
+
+                    // Check if this tag is a GitHub release and populate metadata
+                    let (is_release, release_name, release_url, published_at) =
+                        if let Some(release) = release_map.get(tag_name) {
+                            (
+                                true,
+                                release.name.clone(),
+                                Some(release.url.clone()),
+                                release.published_at.clone(),
+                            )
+                        } else {
+                            (false, None, None, None)
+                        };
 
                     tags.push(TagInfo {
                         name: tag_name.to_string(),
@@ -203,6 +218,9 @@ impl GitRepo {
                         is_semver,
                         semver_info,
                         is_release,
+                        release_name,
+                        release_url,
+                        published_at,
                     });
                 }
             }
