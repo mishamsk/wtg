@@ -18,35 +18,23 @@ A totally vibe-coded tool, so do not blame me if it hurts your feelings. 😄
 
 ### Recommended: Python package
 
-Run the CLI straight from PyPI without installing anything permanently:
+Run the (python) CLI without installing anything permanently:
 
 ```bash
-uvx --from wtg-cli wtg --help
+uvx --from git+https://github.com/mishamsk/wtg.git wtg --help
 ```
 
 Or install it as a global tool (works on macOS, Linux, and Windows):
 
 ```bash
-uv tool install wtg-cli
+uv tool install git+https://github.com/mishamsk/wtg.git
 wtg --help
 ```
 
-`wtg-cli` is just a regular wheel, so it can also be installed with `pip`, `pipx`, or any other Python package manager.
+### Alternative: build/install from source
 
 ```bash
-pip install wtg-cli
-```
-
-Working from a local checkout? `uv run` will build the wheel in place and execute it:
-
-```bash
-uv run wtg --help
-```
-
-### Alternative: build from source
-
-```bash
-cargo install --path crates/wtg
+cargo install --git https://github.com/mishamsk/wtg.git
 ```
 
 ## Usage
@@ -72,20 +60,21 @@ wtg v1.2.3
 
 ### Commit
 ```
-🔍 Found commit: 9659c9f
+🔍 Found commit: c4e0cc8e98d3
 
-📝 📝 changelog
-   📅 2023-09-03 23:57:54
-   📚 Someone likes to write essays... 1 more line
-
-👎 Who's to blame for this pesky bug:
-   👤 mishamsk (5206955+mishamsk@users.noreply.github.com)
+💻 The Commit:
+   Hash: c4e0cc8
+   👤 Who wrote this gem:
+      mishamsk (5206955+mishamsk@users.noreply.github.com)
+      🔗 https://github.com/mishamsk
+   📝 ⬇️ reduce msrv
+   📅 2024-11-07 03:37:26
+   🔗 https://github.com/mishamsk/sas-lexer/commit/c4e0cc8e98d3e786916ac811c5617ecb68d1a6fd
 
 📦 First shipped in:
-   🏷️  v2.0.0
-   🔗 https://github.com/mishamsk/pyoak/releases/tag/v2.0.0
-
-🔗 https://github.com/mishamsk/pyoak/commit/9659c9f08a4cf2ba53e6a6f3316f02c302a10c50
+   🎉 rust-v1.0.0-beta.3 (rust-v1.0.0-beta.3)
+   📅 2024-11-08 03:03:21 U
+   🔗 https://github.com/mishamsk/sas-lexer/releases/tag/rust-v1.0.0-beta.3
 ```
 
 ## GitHub Authentication
@@ -113,7 +102,7 @@ For better rate limits, set a GitHub token:
 
 - Only supports GitHub (GitLab and others coming... maybe?)
 - No caching (every query hits git/GitHub fresh)
-- Issue/PR closing commit detection not yet implemented
+- Squashed commits detection not yet implemented
 - No TUI mode (planned for future)
 
 ## License
