@@ -358,46 +358,92 @@ fn display_file(file_result: FileResult) {
     println!("{} {}", "📄 Found file:".green().bold(), info.path.cyan());
     println!();
 
-    // Last touched
-    println!("{}", "🕐 Last touched:".yellow().bold());
-    println!(
-        "   {} by {} on {}",
-        info.last_commit.short_hash.cyan(),
-        info.last_commit.author_name.cyan(),
-        info.last_commit.date.dark_grey()
-    );
-    println!("   {} {}", "📝".yellow(), info.last_commit.message.white());
+    // Get the author URL for the last commit (first in the list)
+    let last_commit_author_url = file_result.author_urls.first().and_then(|opt| opt.as_ref());
 
-    if let Some(url) = &file_result.commit_url {
-        print_link(url);
+    // Display the commit section (consistent with PR/issue flow)
+    display_commit_section(
+        &info.last_commit,
+        file_result.commit_url.as_ref(),
+        last_commit_author_url,
+        None, // Files don't have associated PRs
+    );
+
+    // Count how many times the last commit author appears in previous commits
+    let last_author_name = &info.last_commit.author_name;
+    let repeat_count = info
+        .previous_authors
+        .iter()
+        .filter(|(_, name, _)| name == last_author_name)
+        .count();
+
+    // Add snarky comment if they're a repeat offender
+    if repeat_count > 0 {
+        let joke = match repeat_count {
+            1 => format!(
+                "   💀 {} can't stop touching this file... {} more time before this!",
+                last_author_name.as_str().cyan(),
+                repeat_count
+            ),
+            2 => format!(
+                "   💀 {} really loves this file... {} more times before this!",
+                last_author_name.as_str().cyan(),
+                repeat_count
+            ),
+            3 => format!(
+                "   💀 {} is obsessed... {} more times before this!",
+                last_author_name.as_str().cyan(),
+                repeat_count
+            ),
+            _ => format!(
+                "   💀 {} REALLY needs to leave this alone... {} more times before this!",
+                last_author_name.as_str().cyan(),
+                repeat_count
+            ),
+        };
+        println!("{}", joke.dark_grey().italic());
     }
 
     println!();
 
-    // Previous authors
+    // Previous authors - snarky hall of shame (deduplicated)
     if !info.previous_authors.is_empty() {
-        println!("{}", "📜 Previous blame (up to 4):".yellow().bold());
+        // Deduplicate authors - track who we've seen
+        let mut seen_authors = std::collections::HashSet::new();
+        seen_authors.insert(last_author_name.clone()); // Skip the last commit author
 
-        for (idx, (hash, name, _email)) in info.previous_authors.iter().enumerate() {
-            print!(
-                "   {}. {} - {}",
-                idx + 1,
-                hash.as_str().cyan(),
-                name.as_str().cyan()
-            );
+        let unique_authors: Vec<_> = info
+            .previous_authors
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, name, _))| seen_authors.insert(name.clone()))
+            .collect();
 
-            if let Some(Some(url)) = file_result.author_urls.get(idx) {
-                print!(" {}", format!("({url})").blue().underlined());
+        if !unique_authors.is_empty() {
+            let count = unique_authors.len();
+            let header = if count == 1 {
+                "👻 One ghost from the past:"
+            } else {
+                "👻 The usual suspects (who else touched this):"
+            };
+            println!("{}", header.yellow().bold());
+
+            for (original_idx, (hash, name, _email)) in unique_authors {
+                print!("   → {} • {}", hash.as_str().cyan(), name.as_str().cyan());
+
+                if let Some(Some(url)) = file_result.author_urls.get(original_idx) {
+                    print!(" {} {}", "🔗".blue(), url.as_str().blue().underlined());
+                }
+
+                println!();
             }
 
             println!();
         }
-
-        println!();
     }
 
     // Release info
-    display_release_info(file_result.release, None);
+    display_release_info(file_result.release, file_result.commit_url.as_deref());
 }
 
 fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option<&str>) {
