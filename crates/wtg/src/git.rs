@@ -1,4 +1,5 @@
 use crate::error::{Result, WtgError};
+use crate::github::ReleaseInfo;
 use git2::{Commit, Oid, Repository, Time};
 use std::path::Path;
 
@@ -174,7 +175,18 @@ impl GitRepo {
 
     /// Get all tags in the repository
     pub fn get_tags(&self) -> Vec<TagInfo> {
+        self.get_tags_with_releases(&[])
+    }
+
+    /// Get all tags in the repository, enriched with GitHub release info
+    pub fn get_tags_with_releases(&self, github_releases: &[ReleaseInfo]) -> Vec<TagInfo> {
         let mut tags = Vec::new();
+
+        // Build a map of tag names from GitHub releases for quick lookup
+        let release_map: std::collections::HashMap<String, &ReleaseInfo> = github_releases
+            .iter()
+            .map(|r| (r.tag_name.clone(), r))
+            .collect();
 
         if let Ok(tag_names) = self.repo.tag_names(None) {
             for tag_name in tag_names.iter().flatten() {
@@ -183,12 +195,14 @@ impl GitRepo {
                 {
                     let semver_info = parse_semver(tag_name);
                     let is_semver = semver_info.is_some();
+                    let is_release = release_map.contains_key(tag_name);
+
                     tags.push(TagInfo {
                         name: tag_name.to_string(),
                         commit_hash: commit.id().to_string(),
                         is_semver,
                         semver_info,
-                        is_release: false, // Git tags are not GitHub releases
+                        is_release,
                     });
                 }
             }
@@ -199,20 +213,58 @@ impl GitRepo {
 
     /// Find the closest release that contains a given commit
     pub fn find_closest_release(&self, commit_hash: &str) -> Option<TagInfo> {
+        self.find_closest_release_with_github(&[], commit_hash)
+    }
+
+    /// Find the closest release that contains a given commit, with GitHub releases prioritized
+    pub fn find_closest_release_with_github(
+        &self,
+        github_releases: &[ReleaseInfo],
+        commit_hash: &str,
+    ) -> Option<TagInfo> {
         let commit_oid = Oid::from_str(commit_hash).ok()?;
-        let all_tags = self.get_tags();
+        let all_tags = self.get_tags_with_releases(github_releases);
 
-        // First try: Find semver tags that contain this commit
-        let semver_tags: Vec<_> = all_tags.iter().filter(|t| t.is_semver).cloned().collect();
+        // Priority 1: GitHub releases (semver)
+        let github_semver_releases: Vec<_> = all_tags
+            .iter()
+            .filter(|t| t.is_release && t.is_semver)
+            .cloned()
+            .collect();
 
-        if let Some(tag) = self.find_containing_tag(commit_oid, semver_tags) {
+        if let Some(tag) = self.find_containing_tag(commit_oid, github_semver_releases) {
             return Some(tag);
         }
 
-        // Fallback: If no semver tag found, try nearest ancestor non-semver tag
-        let non_semver_tags: Vec<_> = all_tags.into_iter().filter(|t| !t.is_semver).collect();
+        // Priority 2: Git tags (semver)
+        let git_semver_tags: Vec<_> = all_tags
+            .iter()
+            .filter(|t| !t.is_release && t.is_semver)
+            .cloned()
+            .collect();
 
-        self.find_containing_tag(commit_oid, non_semver_tags)
+        if let Some(tag) = self.find_containing_tag(commit_oid, git_semver_tags) {
+            return Some(tag);
+        }
+
+        // Priority 3: Non-semver tags (GitHub releases first)
+        let github_non_semver: Vec<_> = all_tags
+            .iter()
+            .filter(|t| t.is_release && !t.is_semver)
+            .cloned()
+            .collect();
+
+        if let Some(tag) = self.find_containing_tag(commit_oid, github_non_semver) {
+            return Some(tag);
+        }
+
+        // Priority 4: Non-semver git tags
+        let git_non_semver: Vec<_> = all_tags
+            .into_iter()
+            .filter(|t| !t.is_release && !t.is_semver)
+            .collect();
+
+        self.find_containing_tag(commit_oid, git_non_semver)
     }
 
     /// Find the oldest tag that contains the given commit

@@ -35,6 +35,13 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
         .github_remote()
         .map(|(owner, repo)| GitHubClient::new(owner, repo));
 
+    // Fetch GitHub releases if available (used to enrich tag info)
+    let github_releases = if let Some(gh) = &github {
+        gh.fetch_releases().await
+    } else {
+        Vec::new()
+    };
+
     // Track what we tried
     let mut matches = Vec::new();
 
@@ -42,7 +49,7 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
     if let Some(commit_info) = git.find_commit(input) {
         matches.push("commit");
 
-        let release = git.find_closest_release(&commit_info.hash);
+        let release = git.find_closest_release_with_github(&github_releases, &commit_info.hash);
 
         let (github_url, author_url) = if let Some(gh) = &github {
             (
@@ -73,7 +80,7 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
 
             // For PRs, find release using merge commit SHA
             let release = if let Some(merge_sha) = &issue_info.merge_commit_sha {
-                git.find_closest_release(merge_sha)
+                git.find_closest_release_with_github(&github_releases, merge_sha)
             } else {
                 // For issues, try to find commits that mention this issue
                 // TODO: Parse commit messages for "closes #123" patterns
@@ -92,7 +99,10 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
     if let Some(file_info) = git.find_file(input) {
         matches.push("file");
 
-        let release = git.find_closest_release(&file_info.last_commit.hash);
+        let release = git.find_closest_release_with_github(
+            &github_releases,
+            &file_info.last_commit.hash,
+        );
 
         let (github_url, author_urls) = if let Some(gh) = &github {
             let url = Some(gh.commit_url(&file_info.last_commit.hash));
@@ -118,7 +128,7 @@ pub async fn identify(input: &str) -> Result<IdentifiedThing> {
     }
 
     // Try as tag
-    let tags = git.get_tags();
+    let tags = git.get_tags_with_releases(&github_releases);
     if let Some(tag_info) = tags.iter().find(|t| t.name == input) {
         matches.push("tag");
 
