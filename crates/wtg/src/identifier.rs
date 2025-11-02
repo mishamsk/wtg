@@ -263,7 +263,9 @@ async fn resolve_release_for_commit(
         Vec::new()
     };
 
-    let fallback_releases = if has_semver {
+    // Skip GitHub API fallback if we have any local tags (not just semver).
+    // This avoids expensive API calls and ancestry checks when we already have the answer locally.
+    let fallback_releases = if !candidates.is_empty() {
         Vec::new()
     } else if let (Some(gh), Some(since)) = (github, fallback_since) {
         gh.fetch_releases_since(Some(since)).await

@@ -283,10 +283,13 @@ impl GitRepo {
 
     /// Find all tags that contain a given commit (git-only, no GitHub enrichment)
     /// Returns None if no tags contain the commit
+    /// Performance: Filters by timestamp before doing expensive ancestry checks
     fn find_tags_containing_commit(&self, commit_oid: Oid) -> Option<Vec<TagInfo>> {
         self.with_repo(|repo| {
-            let mut containing_tags = Vec::new();
+            let target_commit = repo.find_commit(commit_oid).ok()?;
+            let target_timestamp = target_commit.time().seconds();
 
+            let mut containing_tags = Vec::new();
             let tag_names = repo.tag_names(None).ok()?;
 
             for tag_name in tag_names.iter().flatten() {
@@ -294,6 +297,12 @@ impl GitRepo {
                     && let Ok(commit) = obj.peel_to_commit()
                 {
                     let tag_oid = commit.id();
+
+                    // Performance: Skip tags with commits older than target
+                    // (they cannot possibly contain the target commit)
+                    if commit.time().seconds() < target_timestamp {
+                        continue;
+                    }
 
                     // Check if this tag points to the commit or if the tag is a descendant
                     if tag_oid == commit_oid
