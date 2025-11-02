@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/wtg"]
+default-members = ["crates/wtg"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Misha"]
+license = "MIT"
+repository = "https://github.com/mishamsk/wtg"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Disable specific pedantic lints that are too noisy
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[workspace.dependencies]
