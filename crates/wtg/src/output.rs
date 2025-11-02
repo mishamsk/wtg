@@ -26,6 +26,48 @@ pub fn display(thing: IdentifiedThing) -> Result<()> {
     Ok(())
 }
 
+// Helper functions for consistent formatting
+
+/// Print a clickable URL with consistent styling
+fn print_link(url: &str) {
+    println!("   {} {}", "🔗".blue(), url.blue().underlined());
+}
+
+/// Print author information with optional profile URL
+fn print_author_with_profile(name: &str, email: &str, profile_url: Option<&str>) {
+    println!(
+        "   {} {} ({})",
+        "👤".yellow(),
+        name.cyan(),
+        email.dark_grey()
+    );
+
+    if let Some(url) = profile_url {
+        print_link(url);
+    }
+}
+
+/// Print a single commit summary line with optional URL
+fn print_commit_summary(
+    short_hash: &str,
+    author: &str,
+    date: &str,
+    message: &str,
+    commit_url: Option<&str>,
+) {
+    println!(
+        "   {} by {} on {}",
+        short_hash.cyan(),
+        author.cyan(),
+        date.dark_grey()
+    );
+    println!("   {} {}", "📝".yellow(), message.white());
+
+    if let Some(url) = commit_url {
+        print_link(url);
+    }
+}
+
 fn display_commit(
     info: crate::git::CommitInfo,
     release: Option<crate::git::TagInfo>,
@@ -59,16 +101,7 @@ fn display_commit(
 
     // Who to blame
     println!("{}", "👎 Who's to blame for this pesky bug:".red().bold());
-    println!(
-        "   {} {} ({})",
-        "👤".yellow(),
-        info.author_name.cyan(),
-        info.author_email.dark_grey()
-    );
-
-    if let Some(url) = author_url {
-        println!("   {} {}", "🔗".blue(), url.blue().underlined());
-    }
+    print_author_with_profile(&info.author_name, &info.author_email, author_url.as_deref());
 
     println!();
 
@@ -78,7 +111,7 @@ fn display_commit(
     // Commit link
     if let Some(url) = github_url {
         println!();
-        println!("{} {}", "🔗".blue(), url.blue().underlined());
+        print_link(&url);
     }
 }
 
@@ -93,17 +126,13 @@ fn display_file(
 
     // Last touched
     println!("{}", "🕐 Last touched:".yellow().bold());
-    println!(
-        "   {} by {} on {}",
-        info.last_commit.short_hash.cyan(),
-        info.last_commit.author_name.cyan(),
-        info.last_commit.date.dark_grey()
+    print_commit_summary(
+        &info.last_commit.short_hash,
+        &info.last_commit.author_name,
+        &info.last_commit.date,
+        &info.last_commit.message,
+        github_url.as_deref(),
     );
-    println!("   {} {}", "📝".yellow(), info.last_commit.message.white());
-
-    if let Some(url) = github_url {
-        println!("   {} {}", "🔗".blue(), url.blue().underlined());
-    }
 
     println!();
 
@@ -149,7 +178,7 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
         println!();
     }
 
-    println!("{} {}", "🔗".blue(), info.url.blue().underlined());
+    print_link(&info.url);
     println!();
 
     // For PRs, show merge commit
@@ -199,7 +228,7 @@ fn display_tag(info: crate::git::TagInfo, github_url: Option<String>) {
 
     if let Some(url) = github_url {
         println!();
-        println!("   {} {}", "🔗".blue(), url.blue().underlined());
+        print_link(&url);
     }
 }
 
@@ -215,7 +244,7 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
                 // Extract owner/repo from commit URL
                 if let Some((base_url, _)) = url.rsplit_once("/commit/") {
                     let release_url = format!("{}/releases/tag/{}", base_url, tag.name);
-                    println!("   {} {}", "🔗".blue(), release_url.blue().underlined());
+                    print_link(&release_url);
                 }
             }
         }
