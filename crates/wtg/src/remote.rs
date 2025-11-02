@@ -1,4 +1,4 @@
-use colored::*;
+use crossterm::style::Stylize;
 
 /// Check git remote status and print snarky messages
 pub fn check_remote_and_snark(remote_info: Option<(String, String)>, repo_path: &std::path::Path) {

@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::identifier::IdentifiedThing;
-use colored::*;
+use crossterm::style::Stylize;
 
 pub fn display(thing: IdentifiedThing) -> Result<()> {
     match thing {
@@ -37,7 +37,7 @@ fn display_commit(
 
     // Commit message
     println!("{} {}", "📝".yellow(), info.message.white().bold());
-    println!("   {} {}", "📅".yellow(), info.date.bright_black());
+    println!("   {} {}", "📅".yellow(), info.date.dark_grey());
 
     // Snarky comment if multi-line commit message
     if info.message_lines > 1 {
@@ -50,7 +50,7 @@ fn display_commit(
                 extra_lines,
                 if extra_lines == 1 { "" } else { "s" }
             )
-            .bright_black()
+            .dark_grey()
             .italic()
         );
     }
@@ -63,11 +63,11 @@ fn display_commit(
         "   {} {} ({})",
         "👤".yellow(),
         info.author_name.cyan(),
-        info.author_email.bright_black()
+        info.author_email.dark_grey()
     );
 
     if let Some(url) = author_url {
-        println!("   {} {}", "🔗".blue(), url.blue().underline());
+        println!("   {} {}", "🔗".blue(), url.blue().underlined());
     }
 
     println!();
@@ -78,7 +78,7 @@ fn display_commit(
     // Commit link
     if let Some(url) = github_url {
         println!();
-        println!("{} {}", "🔗".blue(), url.blue().underline());
+        println!("{} {}", "🔗".blue(), url.blue().underlined());
     }
 }
 
@@ -97,12 +97,12 @@ fn display_file(
         "   {} by {} on {}",
         info.last_commit.short_hash.cyan(),
         info.last_commit.author_name.cyan(),
-        info.last_commit.date.bright_black()
+        info.last_commit.date.dark_grey()
     );
     println!("   {} {}", "📝".yellow(), info.last_commit.message.white());
 
     if let Some(url) = github_url {
-        println!("   {} {}", "🔗".blue(), url.blue().underline());
+        println!("   {} {}", "🔗".blue(), url.blue().underlined());
     }
 
     println!();
@@ -112,10 +112,10 @@ fn display_file(
         println!("{}", "📜 Previous blame (up to 4):".yellow().bold());
 
         for (idx, (hash, name, _email)) in info.previous_authors.iter().enumerate() {
-            print!("   {}. {} - {}", idx + 1, hash.cyan(), name.cyan());
+            print!("   {}. {} - {}", idx + 1, hash.as_str().cyan(), name.as_str().cyan());
 
             if let Some(Some(url)) = author_urls.get(idx) {
-                print!(" {}", format!("({})", url).blue().underline());
+                print!(" {}", format!("({})", url).blue().underlined());
             }
 
             println!();
@@ -142,14 +142,14 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
 
     // Author info
     if let Some(author) = &info.author {
-        print!("   {} {}", "👤".yellow(), author.cyan());
+        print!("   {} {}", "👤".yellow(), author.as_str().cyan());
         if let Some(url) = &info.author_url {
-            print!(" {}", format!("({})", url).blue().underline());
+            print!(" {}", format!("({})", url).blue().underlined());
         }
         println!();
     }
 
-    println!("{} {}", "🔗".blue(), info.url.blue().underline());
+    println!("{} {}", "🔗".blue(), info.url.blue().underlined());
     println!();
 
     // For PRs, show merge commit
@@ -174,7 +174,7 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
         } else {
             println!("{}", "✅ Closed by:".green().bold());
             for commit in &info.closing_commits {
-                println!("   {} {}", "•".yellow(), commit.cyan());
+                println!("   {} {}", "•".yellow(), commit.as_str().cyan());
             }
         }
         println!();
@@ -199,7 +199,7 @@ fn display_tag(info: crate::git::TagInfo, github_url: Option<String>) {
 
     if let Some(url) = github_url {
         println!();
-        println!("   {} {}", "🔗".blue(), url.blue().underline());
+        println!("   {} {}", "🔗".blue(), url.blue().underlined());
     }
 }
 
@@ -208,14 +208,14 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
 
     match release {
         Some(tag) => {
-            println!("   {} {}", "🏷️ ".yellow(), tag.name.cyan().bold());
+            println!("   {} {}", "🏷️ ".yellow(), tag.name.as_str().cyan().bold());
 
             // Build GitHub URLs if we have a commit URL
             if let Some(url) = commit_url {
                 // Extract owner/repo from commit URL
                 if let Some((base_url, _)) = url.rsplit_once("/commit/") {
                     let release_url = format!("{}/releases/tag/{}", base_url, tag.name);
-                    println!("   {} {}", "🔗".blue(), release_url.blue().underline());
+                    println!("   {} {}", "🔗".blue(), release_url.blue().underlined());
                 }
             }
         }

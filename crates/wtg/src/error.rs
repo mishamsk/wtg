@@ -1,4 +1,4 @@
-use colored::*;
+use crossterm::style::Stylize;
 use std::fmt;
 
 pub type Result<T> = std::result::Result<T, WtgError>;
@@ -35,7 +35,7 @@ impl fmt::Display for WtgError {
                 writeln!(f, "   {} File in repo", "❌".red())?;
                 writeln!(f, "   {} Git tag", "❌".red())?;
                 writeln!(f)?;
-                writeln!(f, "   {}: {}", "Input was".yellow(), input.cyan())
+                writeln!(f, "   {}: {}", "Input was".yellow(), input.as_str().cyan())
             }
             WtgError::Git(e) => write!(f, "Git error: {}", e),
             WtgError::GitHub(e) => write!(f, "GitHub error: {}", e),
