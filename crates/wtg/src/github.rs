@@ -17,6 +17,7 @@ pub struct IssueInfo {
     pub state: String,
     pub url: String,
     pub closing_commits: Vec<String>,
+    pub closing_prs: Vec<u64>, // PR numbers that closed this issue
     pub merge_commit_sha: Option<String>,
     pub author: Option<String>,
     pub author_url: Option<String>,
@@ -96,6 +97,7 @@ impl GitHubClient {
                 state: format!("{:?}", pr.state),
                 url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
                 closing_commits: Vec::new(),
+                closing_prs: Vec::new(),
                 merge_commit_sha: pr.merge_commit_sha,
                 author,
                 author_url,
@@ -108,7 +110,7 @@ impl GitHubClient {
             let author_url = Some(Self::profile_url(&author));
 
             // For issues (not PRs), try to find closing PRs via timeline
-            let closing_commits = self.find_closing_pr_commits(number).await;
+            let (closing_commits, closing_prs) = self.find_closing_pr_commits(number).await;
 
             return Some(IssueInfo {
                 number,
@@ -117,6 +119,7 @@ impl GitHubClient {
                 state: format!("{:?}", issue.state),
                 url: issue.html_url.to_string(),
                 closing_commits,
+                closing_prs,
                 merge_commit_sha: None,
                 author: Some(author),
                 author_url,
@@ -127,13 +130,15 @@ impl GitHubClient {
     }
 
     /// Find closing PR commits for an issue by examining timeline events
-    async fn find_closing_pr_commits(&self, issue_number: u64) -> Vec<String> {
+    /// Returns (commit_shas, pr_numbers)
+    async fn find_closing_pr_commits(&self, issue_number: u64) -> (Vec<String>, Vec<u64>) {
         let client = match self.client.as_ref() {
             Some(c) => c,
-            None => return Vec::new(),
+            None => return (Vec::new(), Vec::new()),
         };
 
         let mut closing_commits = Vec::new();
+        let mut closing_prs = Vec::new();
 
         // Fetch timeline events for the issue
         // Timeline events include "closed" events that may reference a PR
@@ -159,6 +164,7 @@ impl GitHubClient {
                                 if let Some(source) = event.get("source") {
                                     if let Some(issue) = source.get("issue") {
                                         if let Some(pr_number) = issue.get("number").and_then(|v| v.as_u64()) {
+                                            closing_prs.push(pr_number);
                                             // Fetch this PR to get its merge commit
                                             if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(pr_number).await {
                                                 if let Some(merge_sha) = pr.merge_commit_sha {
@@ -175,11 +181,11 @@ impl GitHubClient {
             }
             Err(_) => {
                 // Timeline API might not be available or issue might not exist
-                // Return empty list
+                // Return empty lists
             }
         }
 
-        closing_commits
+        (closing_commits, closing_prs)
     }
 
     /// Fetch all releases from GitHub

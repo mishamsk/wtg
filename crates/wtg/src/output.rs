@@ -205,8 +205,8 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
         }
         println!();
     } else {
-        // For issues, show closing commits if any
-        if info.closing_commits.is_empty() {
+        // For issues, show closing PRs and commits if any
+        if info.closing_prs.is_empty() && info.closing_commits.is_empty() {
             println!(
                 "{}",
                 "🤷 No commits claimed to fix this... suspicious!"
@@ -215,8 +215,23 @@ fn display_issue(info: crate::github::IssueInfo, release: Option<crate::git::Tag
             );
         } else {
             println!("{}", "✅ Closed by:".green().bold());
+
+            // Show closing PRs with links
+            if !info.closing_prs.is_empty() {
+                // Derive base URL from issue URL
+                // Issue URL format: https://github.com/owner/repo/issues/123
+                if let Some(base_url) = info.url.rsplit_once("/issues/").map(|(base, _)| base) {
+                    for pr_number in &info.closing_prs {
+                        println!("   {} PR #{}", "🔀".yellow(), pr_number.to_string().as_str().cyan().bold());
+                        let pr_url = format!("{base_url}/pull/{pr_number}");
+                        print_link(&pr_url);
+                    }
+                }
+            }
+
+            // Show closing commits
             for commit in &info.closing_commits {
-                println!("   {} {}", "•".yellow(), commit.as_str().cyan());
+                println!("   {} {}", "•".yellow(), commit[..7].cyan());
             }
         }
         println!();
