@@ -48,8 +48,7 @@ pub enum IdentifiedThing {
     TagOnly(TagInfo, Option<String>), // Just a tag, no commit yet
 }
 
-pub async fn identify(input: &str) -> Result<IdentifiedThing> {
-    let git = GitRepo::open()?;
+pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
     let github = git
         .github_remote()
         .map(|(owner, repo)| GitHubClient::new(owner, repo));
@@ -97,12 +96,24 @@ async fn resolve_commit(
     github: Option<&GitHubClient>,
 ) -> IdentifiedThing {
     let commit_url = github.map(|gh| gh.commit_url(&commit_info.hash));
-    let commit_author_github_url =
-        extract_github_username(&commit_info.author_email).map(|u| GitHubClient::profile_url(&u));
 
-    // Lazy-load releases
+    // Try to get GitHub username: first from email, then from GitHub API
+    let commit_author_github_url =
+        if let Some(username) = extract_github_username(&commit_info.author_email) {
+            Some(GitHubClient::profile_url(&username))
+        } else if let Some(gh) = github {
+            // Fallback: fetch from GitHub API to get actual username
+            gh.fetch_commit_author(&commit_info.hash)
+                .await
+                .map(|u| GitHubClient::profile_url(&u))
+        } else {
+            None
+        };
+
+    // OPTIMIZED: Use commit date to filter releases (only fetch releases after this commit)
     let github_releases = if let Some(gh) = github {
-        gh.fetch_releases().await
+        let commit_date = commit_info.date_rfc3339();
+        gh.fetch_releases_since(Some(&commit_date)).await
     } else {
         Vec::new()
     };
@@ -133,8 +144,16 @@ async fn resolve_number(
         if let Some(merge_sha) = &pr_info.merge_commit_sha {
             if let Some(commit_info) = git.find_commit(merge_sha) {
                 let commit_url = Some(gh.commit_url(&commit_info.hash));
-                let commit_author_github_url = extract_github_username(&commit_info.author_email)
-                    .map(|u| GitHubClient::profile_url(&u));
+
+                // Try to get GitHub username: first from email, then from GitHub API
+                let commit_author_github_url =
+                    if let Some(username) = extract_github_username(&commit_info.author_email) {
+                        Some(GitHubClient::profile_url(&username))
+                    } else {
+                        gh.fetch_commit_author(&commit_info.hash)
+                            .await
+                            .map(|u| GitHubClient::profile_url(&u))
+                    };
 
                 // Optimize: only fetch releases since PR creation
                 let github_releases = gh.fetch_releases_since(pr_info.created_at.as_deref()).await;
@@ -173,9 +192,17 @@ async fn resolve_number(
                 if let Some(merge_sha) = &pr_info.merge_commit_sha {
                     if let Some(commit_info) = git.find_commit(merge_sha) {
                         let commit_url = Some(gh.commit_url(&commit_info.hash));
-                        let commit_author_github_url =
+
+                        // Try to get GitHub username: first from email, then from GitHub API
+                        let commit_author_github_url = if let Some(username) =
                             extract_github_username(&commit_info.author_email)
-                                .map(|u| GitHubClient::profile_url(&u));
+                        {
+                            Some(GitHubClient::profile_url(&username))
+                        } else {
+                            gh.fetch_commit_author(&commit_info.hash)
+                                .await
+                                .map(|u| GitHubClient::profile_url(&u))
+                        };
 
                         // Optimize: only fetch releases since issue creation
                         let github_releases = gh
@@ -230,8 +257,10 @@ async fn resolve_file(
     git: &GitRepo,
     github: Option<&GitHubClient>,
 ) -> IdentifiedThing {
+    // OPTIMIZED: Use file's last commit date to filter releases
     let github_releases = if let Some(gh) = github {
-        gh.fetch_releases().await
+        let commit_date = file_info.last_commit.date_rfc3339();
+        gh.fetch_releases_since(Some(&commit_date)).await
     } else {
         Vec::new()
     };

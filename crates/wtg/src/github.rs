@@ -94,6 +94,20 @@ impl GitHubClient {
         self.client.is_some()
     }
 
+    /// Fetch the GitHub username of a commit author
+    /// Returns None if the commit doesn't exist on GitHub or has no author
+    pub async fn fetch_commit_author(&self, commit_hash: &str) -> Option<String> {
+        let client = self.client.as_ref()?;
+
+        let commit = client
+            .commits(&self.owner, &self.repo)
+            .get(commit_hash)
+            .await
+            .ok()?;
+
+        commit.author.map(|author| author.login)
+    }
+
     /// Try to fetch a PR
     pub async fn fetch_pr(&self, number: u64) -> Option<PullRequestInfo> {
         let client = self.client.as_ref()?;
@@ -133,8 +147,13 @@ impl GitHubClient {
             let author_url = Some(Self::profile_url(&author));
             let created_at = Some(issue.created_at.to_string());
 
-            // Find closing PRs via timeline
-            let closing_prs = self.find_closing_prs(number).await;
+            // OPTIMIZED: Only fetch timeline for closed issues (open issues can't have closing PRs)
+            let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
+            let closing_prs = if is_closed {
+                self.find_closing_prs(number).await
+            } else {
+                Vec::new()
+            };
 
             return Some(IssueInfo {
                 number,

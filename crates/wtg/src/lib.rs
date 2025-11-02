@@ -44,7 +44,7 @@ async fn run_async(cli: Cli) -> Result<()> {
     remote::check_remote_and_snark(remote_info, git_repo.path());
 
     // Detect what type of input we have
-    let result = identifier::identify(&cli.input).await?;
+    let result = identifier::identify(&cli.input, git_repo).await?;
 
     // Display the result
     output::display(result)?;
