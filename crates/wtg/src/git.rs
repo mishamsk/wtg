@@ -1,8 +1,9 @@
 use crate::error::{Result, WtgError};
 use crate::github::ReleaseInfo;
 use git2::{Commit, Oid, Repository, Time};
+use regex::Regex;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 #[derive(Clone)]
 pub struct GitRepo {
@@ -294,9 +295,11 @@ impl GitRepo {
                 {
                     let tag_oid = commit.id();
 
-                    if repo
-                        .graph_descendant_of(tag_oid, commit_oid)
-                        .unwrap_or(false)
+                    // Check if this tag points to the commit or if the tag is a descendant
+                    if tag_oid == commit_oid
+                        || repo
+                            .graph_descendant_of(tag_oid, commit_oid)
+                            .unwrap_or(false)
                     {
                         let semver_info = parse_semver(tag_name);
 
@@ -398,80 +401,63 @@ fn commit_touches_file(commit: &Commit, path: &str) -> bool {
     tree.get_path(Path::new(path)).is_ok()
 }
 
+/// Regex for parsing semantic versions with various formats
+/// Supports:
+/// - Optional prefix: py-, rust-, python-, etc.
+/// - Optional 'v' prefix
+/// - Version: X.Y, X.Y.Z, X.Y.Z.W
+/// - Pre-release: -alpha, -beta.1, -rc.1 (dash style) OR a1, b1, rc1 (Python style)
+/// - Build metadata: +build.123
+static SEMVER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?:[a-z]+-)?v?(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:(?:-([a-zA-Z0-9.-]+))|(?:([a-z]+)(\d+)))?(?:\+(.+))?$"
+    )
+    .expect("Invalid semver regex")
+});
+
 /// Parse a semantic version string
 /// Supports:
 /// - 2-part: 1.0
 /// - 3-part: 1.2.3
 /// - 4-part: 1.2.3.4
-/// - Pre-release: 1.0.0-alpha, 1.0.0-rc.1
+/// - Pre-release: 1.0.0-alpha, 1.0.0-rc.1, 1.0.0-beta.1
+/// - Python-style pre-release: 1.2.3a1, 1.2.3b1, 1.2.3rc1
 /// - Build metadata: 1.0.0+build.123
-/// - With or without 'v' prefix
+/// - With or without 'v' prefix (e.g., v1.0.0)
+/// - With custom prefixes (e.g., py-v1.0.0, rust-v1.0.0, python-1.0.0)
 fn parse_semver(tag: &str) -> Option<SemverInfo> {
-    // Strip 'v' prefix if present
-    let tag = tag.strip_prefix('v').unwrap_or(tag);
+    let caps = SEMVER_REGEX.captures(tag)?;
 
-    // Split by '+' for build metadata
-    let (version_part, build_metadata) = if let Some((ver, meta)) = tag.split_once('+') {
-        (ver, Some(meta.to_string()))
-    } else {
-        (tag, None)
-    };
+    let major = caps.get(1)?.as_str().parse::<u32>().ok()?;
+    let minor = caps.get(2)?.as_str().parse::<u32>().ok()?;
+    let patch = caps.get(3).and_then(|m| m.as_str().parse::<u32>().ok());
+    let build = caps.get(4).and_then(|m| m.as_str().parse::<u32>().ok());
 
-    // Split by '-' for pre-release
-    let (numeric_part, pre_release) = if let Some((num, pre)) = version_part.split_once('-') {
-        (num, Some(pre.to_string()))
-    } else {
-        (version_part, None)
-    };
-
-    // Parse numeric parts separated by '.'
-    let parts: Vec<&str> = numeric_part.split('.').collect();
-
-    match parts.len() {
-        2 => {
-            // X.Y
-            let major = parts[0].parse::<u32>().ok()?;
-            let minor = parts[1].parse::<u32>().ok()?;
-            Some(SemverInfo {
-                major,
-                minor,
-                patch: None,
-                build: None,
-                pre_release,
-                build_metadata,
+    // Pre-release can be either:
+    // - Group 5: dash-style (-alpha, -beta.1, -rc.1)
+    // - Groups 6+7: Python-style (a1, b1, rc1)
+    let pre_release = caps.get(5).map_or_else(
+        || {
+            caps.get(6).map(|py_pre| {
+                let py_num = caps
+                    .get(7)
+                    .map_or(String::new(), |m| m.as_str().to_string());
+                format!("{}{}", py_pre.as_str(), py_num)
             })
-        }
-        3 => {
-            // X.Y.Z
-            let major = parts[0].parse::<u32>().ok()?;
-            let minor = parts[1].parse::<u32>().ok()?;
-            let patch = parts[2].parse::<u32>().ok()?;
-            Some(SemverInfo {
-                major,
-                minor,
-                patch: Some(patch),
-                build: None,
-                pre_release,
-                build_metadata,
-            })
-        }
-        4 => {
-            // X.Y.Z.W
-            let major = parts[0].parse::<u32>().ok()?;
-            let minor = parts[1].parse::<u32>().ok()?;
-            let patch = parts[2].parse::<u32>().ok()?;
-            let build = parts[3].parse::<u32>().ok()?;
-            Some(SemverInfo {
-                major,
-                minor,
-                patch: Some(patch),
-                build: Some(build),
-                pre_release,
-                build_metadata,
-            })
-        }
-        _ => None,
-    }
+        },
+        |dash_pre| Some(dash_pre.as_str().to_string()),
+    );
+
+    let build_metadata = caps.get(8).map(|m| m.as_str().to_string());
+
+    Some(SemverInfo {
+        major,
+        minor,
+        patch,
+        build,
+        pre_release,
+        build_metadata,
+    })
 }
 
 /// Check if a tag name is a semantic version
@@ -643,17 +629,116 @@ mod tests {
 
     #[test]
     fn test_is_semver_tag() {
+        // Basic versions
         assert!(is_semver_tag("1.0"));
         assert!(is_semver_tag("v1.0"));
         assert!(is_semver_tag("1.2.3"));
         assert!(is_semver_tag("v1.2.3"));
         assert!(is_semver_tag("1.2.3.4"));
+
+        // Pre-release versions
         assert!(is_semver_tag("1.0.0-alpha"));
         assert!(is_semver_tag("v2.0.0-rc.1"));
+        assert!(is_semver_tag("1.2.3-beta.2"));
+
+        // Python-style pre-release
+        assert!(is_semver_tag("1.2.3a1"));
+        assert!(is_semver_tag("1.2.3b1"));
+        assert!(is_semver_tag("1.2.3rc1"));
+
+        // Build metadata
         assert!(is_semver_tag("1.0.0+build"));
 
+        // Custom prefixes
+        assert!(is_semver_tag("py-v1.0.0"));
+        assert!(is_semver_tag("rust-v1.2.3-beta.1"));
+        assert!(is_semver_tag("python-1.2.3b1"));
+
+        // Invalid
         assert!(!is_semver_tag("v1"));
         assert!(!is_semver_tag("abc"));
         assert!(!is_semver_tag("1.2.3.4.5"));
+        assert!(!is_semver_tag("server-v-1.0.0")); // Double dash should fail
+    }
+
+    #[test]
+    fn test_parse_semver_with_custom_prefix() {
+        // Test py-v prefix
+        let result = parse_semver("py-v1.0.0-beta.1");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("beta.1".to_string()));
+
+        // Test rust-v prefix
+        let result = parse_semver("rust-v1.0.0-beta.2");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("beta.2".to_string()));
+
+        // Test prefix without v
+        let result = parse_semver("python-2.1.0");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 2);
+        assert_eq!(semver.minor, 1);
+        assert_eq!(semver.patch, Some(0));
+    }
+
+    #[test]
+    fn test_parse_semver_python_style() {
+        // Alpha
+        let result = parse_semver("1.2.3a1");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 2);
+        assert_eq!(semver.patch, Some(3));
+        assert_eq!(semver.pre_release, Some("a1".to_string()));
+
+        // Beta
+        let result = parse_semver("v1.2.3b2");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 2);
+        assert_eq!(semver.patch, Some(3));
+        assert_eq!(semver.pre_release, Some("b2".to_string()));
+
+        // Release candidate
+        let result = parse_semver("2.0.0rc1");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 2);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("rc1".to_string()));
+
+        // With prefix
+        let result = parse_semver("py-v1.0.0b1");
+        assert!(result.is_some());
+        let semver = result.unwrap();
+        assert_eq!(semver.major, 1);
+        assert_eq!(semver.minor, 0);
+        assert_eq!(semver.patch, Some(0));
+        assert_eq!(semver.pre_release, Some("b1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_semver_rejects_garbage() {
+        // Should reject random strings with -v in them
+        assert!(parse_semver("server-v-config").is_none());
+        assert!(parse_semver("whatever-v-something").is_none());
+
+        // Should reject malformed versions
+        assert!(parse_semver("v1").is_none());
+        assert!(parse_semver("1").is_none());
+        assert!(parse_semver("1.2.3.4.5").is_none());
+        assert!(parse_semver("abc.def").is_none());
     }
 }

@@ -16,6 +16,7 @@ serde = { workspace = true }
 serde_yaml = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
+regex = { workspace = true }
 
 [lints]
 workspace = true
