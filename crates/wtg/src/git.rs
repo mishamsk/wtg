@@ -29,6 +29,8 @@ pub struct TagInfo {
     pub name: String,
     pub commit_hash: String,
     pub is_semver: bool,
+    pub semver_info: Option<SemverInfo>,
+    pub is_release: bool, // Whether this is a GitHub release
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,11 +176,14 @@ impl GitRepo {
             for tag_name in tag_names.iter().flatten() {
                 if let Ok(obj) = self.repo.revparse_single(tag_name) {
                     if let Ok(commit) = obj.peel_to_commit() {
-                        let is_semver = is_semver_tag(tag_name);
+                        let semver_info = parse_semver(tag_name);
+                        let is_semver = semver_info.is_some();
                         tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: commit.id().to_string(),
                             is_semver,
+                            semver_info,
+                            is_release: false, // Git tags are not GitHub releases
                         });
                     }
                 }
@@ -354,6 +359,7 @@ fn parse_semver(tag: &str) -> Option<SemverInfo> {
 }
 
 /// Check if a tag name is a semantic version
+#[cfg(test)]
 fn is_semver_tag(tag: &str) -> bool {
     parse_semver(tag).is_some()
 }
