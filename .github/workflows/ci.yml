@@ -33,8 +33,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Install just
-        uses: taiki-e/install-action@just
       - name: Format check
         run: just fmt-check
 
@@ -61,18 +59,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-
+      - name: Install just
+        uses: taiki-e/install-action@just
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
-
       - name: Install cargo udeps
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-udeps
-
-      - name: Install just
-        uses: taiki-e/install-action@just
-
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
