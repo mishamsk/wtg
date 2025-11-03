@@ -1,0 +1,141 @@
+name: Release to crates.io, PyPI & GitHub
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  # Validate that the git tag matches the Cargo.toml version
+  validate-version:
+    name: Validate version tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract version from tag
+        id: get_version
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          # Remove 'v' prefix from tag
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Tag version: $VERSION"
+
+      - name: Check Cargo.toml version matches tag
+        env:
+          TAG_VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo.toml version: $CARGO_VERSION"
+
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "❌ Version mismatch!"
+            echo "Git tag: v$TAG_VERSION"
+            echo "Cargo.toml: $CARGO_VERSION"
+            echo "These must match (tag has 'v' prefix, Cargo.toml does not)"
+            exit 1
+          fi
+
+          echo "✅ Version $TAG_VERSION matches!"
+
+  # Run CI tests
+  test:
+    needs: validate-version
+    uses: ./.github/workflows/ci.yml
+
+  # Build Python wheels
+  build-wheels:
+    needs: validate-version
+    uses: ./.github/workflows/build-py-wheels.yml
+
+  # Publish to crates.io using trusted publishing
+  publish-crates:
+    name: Publish to crates.io
+    needs: [validate-version, test, build-wheels]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write  # Required for OIDC token exchange
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
+
+  # Publish to PyPI using trusted publishing
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [validate-version, test, build-wheels, publish-crates]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write      # For PyPI's trusted publishing
+      attestations: write  # For generating artifact attestation
+      contents: read
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: wheels-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: "wheels/*"
+
+      - name: Publish to PyPI
+        run: uv publish -v wheels/*
+
+  # Create GitHub Release
+  release:
+    name: Create GitHub Release
+    needs: [validate-version, test, build-wheels, publish-crates, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get Changelog Entry
+        id: changelog_reader
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          validation_level: error
+          version: ${{ needs.validate-version.outputs.version }}
+          path: ./CHANGELOG.md
+
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: wheels-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          body: ${{ steps.changelog_reader.outputs.changes }}
+          files: wheels/*
+          draft: true
+          prerelease: ${{ steps.changelog_reader.outputs.status == 'prereleased' }}
