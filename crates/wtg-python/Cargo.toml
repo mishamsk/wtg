@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { workspace = true }
-wtg = { workspace = true }
+wtg-cli = { workspace = true }
 
 [lints]
 workspace = true

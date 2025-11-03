@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use wtg::run_with_args;
+use wtg_cli::run_with_args;
 
 /// Entry point used by the Python package to execute the CLI.
 #[pyfunction]

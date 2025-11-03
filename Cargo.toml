@@ -6,6 +6,7 @@ default-members = ["crates/wtg"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+description = "A snarky but helpful CLI tool to identify git commits, issues, PRs and file changes, and tell you which release they shipped in"
 authors = ["Mike Perlov"]
 license = "MIT"
 readme = "README.md"
@@ -29,7 +30,7 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 # Own crates
-wtg = { path = "crates/wtg" }
+wtg-cli = { path = "crates/wtg" }
 
 # External crates
 clap = { version = "4.5", features = ["derive", "env", "unicode", "wrap_help"] }

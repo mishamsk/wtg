@@ -23,20 +23,20 @@ A totally vibe-coded tool, so do not blame me if it hurts your feelings. 😄
 Run the (python) CLI without installing anything permanently:
 
 ```bash
-uvx --from git+https://github.com/mishamsk/wtg.git wtg --help
+uvx --from wtg-cli wtg --help
 ```
 
 Or install it as a global tool (works on macOS, Linux, and Windows):
 
 ```bash
-uv tool install git+https://github.com/mishamsk/wtg.git
+uv tool install wtg-cli
 wtg --help
 ```
 
 ### Alternative: build/install from source
 
 ```bash
-cargo install --git https://github.com/mishamsk/wtg.git --force
+cargo install wtg-cli
 ```
 
 ## Usage

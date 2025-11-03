@@ -1,10 +1,15 @@
 [package]
-name = "wtg"
+name = "wtg-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "wtg"
+path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
