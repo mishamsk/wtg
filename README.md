@@ -36,7 +36,7 @@ wtg --help
 ### Alternative: build/install from source
 
 ```bash
-cargo install --git https://github.com/mishamsk/wtg.git
+cargo install --git https://github.com/mishamsk/wtg.git --force
 ```
 
 ## Usage
