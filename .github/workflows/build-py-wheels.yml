@@ -53,6 +53,7 @@ jobs:
         run: |
           sed -i 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
+          cargo update --workspace --offline
       - name: "Build sdist"
         uses: PyO3/maturin-action@v1
         with:
@@ -95,6 +96,7 @@ jobs:
         run: |
           sed -i '' 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
+          cargo update --workspace --offline
       - name: "Build wheels"
         uses: PyO3/maturin-action@v1
         with:
@@ -134,6 +136,7 @@ jobs:
         run: |
           sed -i 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
+          cargo update --workspace --offline
       - name: "Build wheels"
         uses: PyO3/maturin-action@v1
         with:
@@ -173,6 +176,7 @@ jobs:
         run: |
           sed -i 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
+          cargo update --workspace --offline
       - name: "Build wheels"
         uses: PyO3/maturin-action@v1
         with:
