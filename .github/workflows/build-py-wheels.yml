@@ -113,6 +113,8 @@ jobs:
           args: --release --locked --out dist
           sccache: "true"
           manylinux: auto
+          before-script-linux: |
+            yum install -y openssl-devel
       - name: "Test wheel"
         run: |
           set -e
