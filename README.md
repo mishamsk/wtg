@@ -7,11 +7,13 @@ A totally vibe-coded tool, so do not blame me if it hurts your feelings. 😄
 ## Features
 
 - 🔍 **Smart Detection**: Automatically identifies what you're looking for (commit hash, issue/PR number, file path, or tag)
+- 🌐 **Remote Repository Support**: Work with any GitHub repository without cloning it locally
+- 🔗 **GitHub URL Parsing**: Paste any GitHub URL (commit, issue, PR, file) and wtg figures it out
 - 🎨 **Colorful Output**: Beautiful terminal output with emojis and colors
 - 😄 **Snarky Messages**: Helpful error messages with personality
 - 📦 **Release Tracking**: Finds which release first shipped your commit
 - 👤 **Blame Info**: Shows who's responsible for that pesky bug
-- 🔗 **GitHub Integration**: Generates clickable links to commits, issues, PRs, and profiles
+- 🚀 **Smart Caching**: Efficiently caches remote repositories with minimal disk usage
 - 🌐 **Graceful Degradation**: Works without network or GitHub remote
 
 ## Installation
@@ -39,6 +41,8 @@ cargo install --git https://github.com/mishamsk/wtg.git
 
 ## Usage
 
+### Local Repository
+
 Simply run `wtg` with any of the following:
 
 ```bash
@@ -55,6 +59,26 @@ wtg Cargo.toml
 # Find a tag
 wtg v1.2.3
 ```
+
+### Remote Repository
+
+Query any GitHub repository without cloning it first:
+
+```bash
+# Using -r flag with owner/repo
+wtg -r astral-sh/uv 0.5.0
+
+# Using full GitHub URL
+wtg -r https://github.com/astral-sh/uv v0.5.0
+
+# Paste any GitHub URL directly
+wtg https://github.com/astral-sh/uv/commit/abc123
+wtg https://github.com/astral-sh/uv/issues/42
+wtg https://github.com/astral-sh/uv/pull/123
+wtg https://github.com/astral-sh/uv/blob/main/README.md
+```
+
+**Note**: Remote repositories are cached in your system's cache directory for faster subsequent queries. The cache uses `--filter=blob:none` (Git 2.17+) for minimal disk usage, with automatic fallback to bare clones on older Git versions.
 
 ## Output Examples
 
@@ -98,10 +122,9 @@ For better rate limits, set a GitHub token:
 4. Finds the closest release that contains the commit
 5. Displays everything in a beautiful, colorful format
 
-## Limitations (v0.1.0)
+## Limitations
 
 - Only supports GitHub (GitLab and others coming... maybe?)
-- No caching (every query hits git/GitHub fresh)
 - Squashed commits detection not yet implemented
 - No TUI mode (planned for future)
 
