@@ -78,18 +78,35 @@ impl GitHubClient {
 
     /// Read GitHub token from gh CLI config (cross-platform)
     fn read_gh_config() -> Option<String> {
-        // Use dirs::config_dir() for cross-platform support
-        // On Unix: ~/.config/gh/hosts.yml
-        // On Windows: %APPDATA%/gh/hosts.yml
-        // On macOS: ~/Library/Application Support/gh/hosts.yml
-        let mut config_path = dirs::config_dir()?;
-        config_path.push("gh");
-        config_path.push("hosts.yml");
+        // gh CLI follows XDG conventions and stores config in:
+        // - Unix/macOS: ~/.config/gh/hosts.yml
+        // - Windows: %APPDATA%/gh/hosts.yml (but dirs crate handles this)
 
-        let content = std::fs::read_to_string(config_path).ok()?;
-        let config: GhConfig = serde_yaml::from_str(&content).ok()?;
+        // Try XDG-style path first (~/.config/gh/hosts.yml)
+        if let Some(home) = dirs::home_dir() {
+            let xdg_path = home.join(".config").join("gh").join("hosts.yml");
+            if let Ok(content) = std::fs::read_to_string(&xdg_path)
+                && let Ok(config) = serde_yaml::from_str::<GhConfig>(&content)
+                && let Some(token) = config.github_com.oauth_token
+            {
+                return Some(token);
+            }
+        }
 
-        config.github_com.oauth_token
+        // Fall back to platform-specific config dir
+        // (~/Library/Application Support/gh/hosts.yml on macOS)
+        if let Some(mut config_path) = dirs::config_dir() {
+            config_path.push("gh");
+            config_path.push("hosts.yml");
+
+            if let Ok(content) = std::fs::read_to_string(&config_path)
+                && let Ok(config) = serde_yaml::from_str::<GhConfig>(&content)
+            {
+                return config.github_com.oauth_token;
+            }
+        }
+
+        None
     }
 
     /// Check if client is available
@@ -141,38 +158,39 @@ impl GitHubClient {
     pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
         let client = self.client.as_ref()?;
 
-        if let Ok(issue) = client.issues(&self.owner, &self.repo).get(number).await {
-            // If it has a pull_request field, it's actually a PR - skip it
-            if issue.pull_request.is_some() {
-                return None;
+        match client.issues(&self.owner, &self.repo).get(number).await {
+            Ok(issue) => {
+                // If it has a pull_request field, it's actually a PR - skip it
+                if issue.pull_request.is_some() {
+                    return None;
+                }
+
+                let author = issue.user.login.clone();
+                let author_url = Some(Self::profile_url(&author));
+                let created_at = Some(issue.created_at.to_string());
+
+                // OPTIMIZED: Only fetch timeline for closed issues (open issues can't have closing PRs)
+                let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
+                let closing_prs = if is_closed {
+                    self.find_closing_prs(number).await
+                } else {
+                    Vec::new()
+                };
+
+                Some(IssueInfo {
+                    number,
+                    title: issue.title,
+                    body: issue.body,
+                    state: issue.state,
+                    url: issue.html_url.to_string(),
+                    author: Some(author),
+                    author_url,
+                    closing_prs,
+                    created_at,
+                })
             }
-
-            let author = issue.user.login.clone();
-            let author_url = Some(Self::profile_url(&author));
-            let created_at = Some(issue.created_at.to_string());
-
-            // OPTIMIZED: Only fetch timeline for closed issues (open issues can't have closing PRs)
-            let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
-            let closing_prs = if is_closed {
-                self.find_closing_prs(number).await
-            } else {
-                Vec::new()
-            };
-
-            return Some(IssueInfo {
-                number,
-                title: issue.title,
-                body: issue.body,
-                state: issue.state,
-                url: issue.html_url.to_string(),
-                author: Some(author),
-                author_url,
-                closing_prs,
-                created_at,
-            });
+            Err(_) => None,
         }
-
-        None
     }
 
     /// Find closing PRs for an issue by examining timeline events
