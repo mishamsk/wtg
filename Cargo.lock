@@ -2255,6 +2255,7 @@ dependencies = [
  "dirs",
  "git2",
  "octocrab",
+ "percent-encoding",
  "regex",
  "serde",
  "serde_yaml",

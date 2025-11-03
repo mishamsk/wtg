@@ -128,9 +128,12 @@ impl GitHubClient {
         None
     }
 
-    /// Fetch the GitHub username of a commit author
-    /// Returns None if the commit doesn't exist on GitHub or has no author
-    pub async fn fetch_commit_author(&self, commit_hash: &str) -> Option<String> {
+    /// Fetch the GitHub username and URLs for a commit
+    /// Returns None if the commit doesn't exist on GitHub
+    pub async fn fetch_commit_info(
+        &self,
+        commit_hash: &str,
+    ) -> Option<(String, String, Option<(String, String)>)> {
         let client = self.client.as_ref()?;
 
         let commit = client
@@ -139,7 +142,12 @@ impl GitHubClient {
             .await
             .ok()?;
 
-        commit.author.map(|author| author.login)
+        let commit_url = commit.html_url;
+        let author_info = commit
+            .author
+            .map(|author| (author.login, author.html_url.into()));
+
+        Some((commit_hash.to_string(), commit_url, author_info))
     }
 
     /// Try to fetch a PR
@@ -148,7 +156,7 @@ impl GitHubClient {
 
         if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(number).await {
             let author = pr.user.as_ref().map(|u| u.login.clone());
-            let author_url = author.as_ref().map(|login| Self::profile_url(login));
+            let author_url = pr.user.as_ref().map(|u| u.html_url.to_string());
             let created_at = pr.created_at.map(|dt| dt.to_string());
 
             return Some(PullRequestInfo {
@@ -179,7 +187,7 @@ impl GitHubClient {
                 }
 
                 let author = issue.user.login.clone();
-                let author_url = Some(Self::profile_url(&author));
+                let author_url = Some(issue.user.html_url.to_string());
                 let created_at = Some(issue.created_at.to_string());
 
                 // OPTIMIZED: Only fetch timeline for closed issues (open issues can't have closing PRs)
@@ -347,23 +355,39 @@ impl GitHubClient {
     }
 
     /// Build GitHub URLs for various things
+    /// Build a commit URL (fallback when API data unavailable)
+    /// Uses URL encoding to prevent injection
     pub fn commit_url(&self, hash: &str) -> String {
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/commit/{}",
-            self.owner, self.repo, hash
+            utf8_percent_encode(&self.owner, NON_ALPHANUMERIC),
+            utf8_percent_encode(&self.repo, NON_ALPHANUMERIC),
+            utf8_percent_encode(hash, NON_ALPHANUMERIC)
         )
     }
 
+    /// Build a tag URL (fallback when API data unavailable)
+    /// Uses URL encoding to prevent injection
     pub fn tag_url(&self, tag: &str) -> String {
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/tree/{}",
-            self.owner, self.repo, tag
+            utf8_percent_encode(&self.owner, NON_ALPHANUMERIC),
+            utf8_percent_encode(&self.repo, NON_ALPHANUMERIC),
+            utf8_percent_encode(tag, NON_ALPHANUMERIC)
         )
     }
 
+    /// Build a profile URL (fallback when API data unavailable)
+    /// Uses URL encoding to prevent injection
     #[must_use]
     pub fn profile_url(username: &str) -> String {
-        format!("https://github.com/{username}")
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+        format!(
+            "https://github.com/{}",
+            utf8_percent_encode(username, NON_ALPHANUMERIC)
+        )
     }
 }
 

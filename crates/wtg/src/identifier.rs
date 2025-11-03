@@ -100,12 +100,8 @@ async fn resolve_commit(
     git: &GitRepo,
     github: Option<&GitHubClient>,
 ) -> IdentifiedThing {
-    let commit_url = github.map(|gh| gh.commit_url(&commit_info.hash));
-
-    // Try to get GitHub username from email or fall back to GitHub API.
-    let commit_author_github_url =
-        resolve_commit_author_profile_url(github, &commit_info.author_email, &commit_info.hash)
-            .await;
+    let (commit_url, commit_author_github_url) =
+        resolve_commit_urls(github, &commit_info.author_email, &commit_info.hash).await;
 
     let commit_date = commit_info.date_rfc3339();
     let release =
@@ -134,14 +130,8 @@ async fn resolve_number(
         if let Some(merge_sha) = &pr_info.merge_commit_sha
             && let Some(commit_info) = git.find_commit(merge_sha)
         {
-            let commit_url = Some(gh.commit_url(&commit_info.hash));
-
-            let commit_author_github_url = resolve_commit_author_profile_url(
-                Some(gh),
-                &commit_info.author_email,
-                &commit_info.hash,
-            )
-            .await;
+            let (commit_url, commit_author_github_url) =
+                resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash).await;
 
             let commit_date = commit_info.date_rfc3339();
             let release =
@@ -176,14 +166,9 @@ async fn resolve_number(
             if let Some(merge_sha) = &pr_info.merge_commit_sha
                 && let Some(commit_info) = git.find_commit(merge_sha)
             {
-                let commit_url = Some(gh.commit_url(&commit_info.hash));
-
-                let commit_author_github_url = resolve_commit_author_profile_url(
-                    Some(gh),
-                    &commit_info.author_email,
-                    &commit_info.hash,
-                )
-                .await;
+                let (commit_url, commit_author_github_url) =
+                    resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash)
+                        .await;
 
                 let commit_date = commit_info.date_rfc3339();
                 let release =
@@ -408,19 +393,31 @@ async fn resolve_file(
     }))
 }
 
-async fn resolve_commit_author_profile_url(
+/// Resolve commit and author URLs efficiently
+/// Returns (`commit_url`, `author_profile_url`)
+async fn resolve_commit_urls(
     github: Option<&GitHubClient>,
     email: &str,
     commit_hash: &str,
-) -> Option<String> {
+) -> (Option<String>, Option<String>) {
+    // Try to extract username from email first (cheap, no API call)
     if let Some(username) = extract_github_username(email) {
-        return Some(GitHubClient::profile_url(&username));
+        // We have the username from email, but still need commit URL
+        let commit_url = github.map(|gh| gh.commit_url(commit_hash));
+        return (commit_url, Some(GitHubClient::profile_url(&username)));
     }
 
-    let gh = github?;
-    gh.fetch_commit_author(commit_hash)
-        .await
-        .map(|login| GitHubClient::profile_url(&login))
+    // Try to fetch both URLs from GitHub API in one call
+    if let Some(gh) = github {
+        if let Some((_hash, commit_url, author_info)) = gh.fetch_commit_info(commit_hash).await {
+            let author_url = author_info.map(|(_login, url)| url);
+            return (Some(commit_url), author_url);
+        }
+        // API call failed, fall back to manual URL building
+        return (Some(gh.commit_url(commit_hash)), None);
+    }
+
+    (None, None)
 }
 
 /// Try to extract GitHub username from email
