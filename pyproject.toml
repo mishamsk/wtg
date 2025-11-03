@@ -29,10 +29,6 @@ bindings = "pyo3"
 strip = true
 profile = "release"
 include = [{ path = "LICENSE", format = "sdist" }]
-exclude = [
-    { path = "Cargo.lock", format = "sdist" },
-    { path = "Cargo.toml", format = "sdist" },
-]
 
 [tool.uv]
 cache-keys = [{ file = "crates/wtg-python/Cargo.toml" }]
