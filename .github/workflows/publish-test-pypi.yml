@@ -6,6 +6,8 @@ on:
 jobs:
   build-wheels:
     uses: ./.github/workflows/build-py-wheels.yml
+    with:
+      version_suffix: dev${{ github.run_number }}
 
   pypi-publish:
     name: Upload to Test PyPI
