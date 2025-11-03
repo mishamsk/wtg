@@ -1,0 +1,127 @@
+# Build wheels for wtg-cli on supported platforms for PyPI publishing.
+name: "Build wheels"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PACKAGE_NAME: wtg-cli
+  MODULE_NAME: wtg_cli
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: "Build sdist"
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - name: "Test sdist"
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install dist/${{ env.MODULE_NAME }}-*.tar.gz --force-reinstall
+          wtg --help
+      - name: "Upload sdist"
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  macos-arm:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: arm64
+      - name: "Build wheels"
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          args: --release --locked --out dist
+          sccache: "true"
+      - name: "Test wheel"
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install ${{ env.PACKAGE_NAME }} --find-links dist --force-reinstall
+          wtg --help
+      - name: "Upload wheels"
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-aarch64
+          path: dist
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+      - name: "Build wheels"
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-pc-windows-msvc
+          args: --release --locked --out dist
+          sccache: "true"
+      - name: "Test wheel"
+        shell: bash
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/Scripts/activate
+          pip install ${{ env.PACKAGE_NAME }} --find-links dist --force-reinstall
+          wtg --help
+      - name: "Upload wheels"
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x86_64
+          path: dist
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+      - name: "Build wheels"
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-unknown-linux-gnu
+          args: --release --locked --out dist
+          sccache: "true"
+          manylinux: auto
+      - name: "Test wheel"
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install ${{ env.PACKAGE_NAME }} --find-links dist --force-reinstall
+          wtg --help
+      - name: "Upload wheels"
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
