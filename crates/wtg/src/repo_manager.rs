@@ -2,6 +2,7 @@ use crate::error::{Result, WtgError};
 use crate::git::GitRepo;
 use git2::{FetchOptions, RemoteCallbacks, Repository};
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Manages repository access for both local and remote repositories
 pub struct RepoManager {
@@ -95,7 +96,7 @@ fn get_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir)
 }
 
-/// Clone a remote repository using git2
+/// Clone a remote repository using subprocess with filter=blob:none, falling back to git2 if needed
 fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<()> {
     // Create parent directory
     if let Some(parent) = target_path.parent() {
@@ -106,6 +107,53 @@ fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<(
 
     eprintln!("🔄 Cloning remote repository {}...", repo_url);
 
+    // Try subprocess with --filter=blob:none first (requires Git 2.17+)
+    match clone_with_filter(&repo_url, target_path) {
+        Ok(()) => {
+            eprintln!("✅ Repository cloned successfully (using filter)");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!(
+                "⚠️  Filter clone failed ({}), falling back to bare clone...",
+                e
+            );
+            // Fall back to git2 bare clone
+            clone_bare_with_git2(&repo_url, target_path)
+        }
+    }
+}
+
+/// Clone with --filter=blob:none using subprocess
+fn clone_with_filter(repo_url: &str, target_path: &PathBuf) -> Result<()> {
+    let output = Command::new("git")
+        .args([
+            "clone",
+            "--filter=blob:none", // Don't download blobs until needed (Git 2.17+)
+            "--bare",             // Bare repository (no working directory)
+            repo_url,
+            target_path.to_str().ok_or_else(|| {
+                WtgError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid path",
+                ))
+            })?,
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(WtgError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to clone with filter: {}", error),
+        )));
+    }
+
+    Ok(())
+}
+
+/// Clone bare repository using git2 (fallback)
+fn clone_bare_with_git2(repo_url: &str, target_path: &PathBuf) -> Result<()> {
     // Clone without progress output for cleaner UX
     let callbacks = RemoteCallbacks::new();
 
@@ -119,9 +167,9 @@ fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<(
 
     // Clone the repository as bare
     // This gets all commits, branches, and tags without checking out files
-    builder.clone(&repo_url, target_path)?;
+    builder.clone(repo_url, target_path)?;
 
-    eprintln!("✅ Repository cloned successfully");
+    eprintln!("✅ Repository cloned successfully (using bare clone)");
 
     Ok(())
 }
@@ -130,6 +178,49 @@ fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<(
 fn update_remote_repo(repo_path: &PathBuf) -> Result<()> {
     eprintln!("🔄 Updating cached repository...");
 
+    // Try subprocess fetch first (works for both filter and non-filter repos)
+    match fetch_with_subprocess(repo_path) {
+        Ok(()) => {
+            eprintln!("✅ Repository updated");
+            Ok(())
+        }
+        Err(_) => {
+            // Fall back to git2
+            fetch_with_git2(repo_path)
+        }
+    }
+}
+
+/// Fetch updates using subprocess
+fn fetch_with_subprocess(repo_path: &PathBuf) -> Result<()> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            repo_path.to_str().ok_or_else(|| {
+                WtgError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid path",
+                ))
+            })?,
+            "fetch",
+            "--all",
+            "--tags",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(WtgError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to fetch: {}", error),
+        )));
+    }
+
+    Ok(())
+}
+
+/// Fetch updates using git2 (fallback)
+fn fetch_with_git2(repo_path: &PathBuf) -> Result<()> {
     let repo = Repository::open(repo_path)?;
 
     // Find the origin remote
