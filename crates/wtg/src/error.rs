@@ -22,14 +22,9 @@ pub enum WtgError {
     NotFound(String),
     Git(git2::Error),
     GitHub(octocrab::Error),
-    #[allow(dead_code)] // Will be used for network error handling
-    NetworkUnavailable,
     MultipleMatches(Vec<String>),
     Io(std::io::Error),
-    Cli {
-        message: String,
-        code: i32,
-    },
+    Cli { message: String, code: i32 },
 }
 
 impl fmt::Display for WtgError {
@@ -84,15 +79,6 @@ impl fmt::Display for WtgError {
                 } else {
                     write!(f, "GitHub error: {e}")
                 }
-            }
-            Self::NetworkUnavailable => {
-                writeln!(
-                    f,
-                    "{}",
-                    "🌐 Network is MIA - this might be an issue, might be your imagination."
-                        .yellow()
-                )?;
-                writeln!(f, "   {}", "Can't reach GitHub to confirm.".yellow())
             }
             Self::MultipleMatches(types) => {
                 writeln!(f, "{}", "💥 OH MY, YOU BLEW ME UP!".red().bold())?;

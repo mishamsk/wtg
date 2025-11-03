@@ -128,12 +128,6 @@ impl GitHubClient {
         None
     }
 
-    /// Check if client is available
-    #[allow(dead_code)] // Will be used for network availability checks
-    pub const fn is_available(&self) -> bool {
-        self.client.is_some()
-    }
-
     /// Fetch the GitHub username of a commit author
     /// Returns None if the commit doesn't exist on GitHub or has no author
     pub async fn fetch_commit_author(&self, commit_hash: &str) -> Option<String> {
@@ -360,14 +354,6 @@ impl GitHubClient {
         )
     }
 
-    #[allow(dead_code)] // Will be used when displaying release info
-    pub fn release_url(&self, tag: &str) -> String {
-        format!(
-            "https://github.com/{}/{}/releases/tag/{}",
-            self.owner, self.repo, tag
-        )
-    }
-
     pub fn tag_url(&self, tag: &str) -> String {
         format!(
             "https://github.com/{}/{}/tree/{}",
@@ -378,22 +364,6 @@ impl GitHubClient {
     #[must_use]
     pub fn profile_url(username: &str) -> String {
         format!("https://github.com/{username}")
-    }
-
-    #[allow(dead_code)] // Will be used for issue link generation
-    pub fn issue_url(&self, number: u64) -> String {
-        format!(
-            "https://github.com/{}/{}/issues/{}",
-            self.owner, self.repo, number
-        )
-    }
-
-    #[allow(dead_code)] // Will be used for PR link generation
-    pub fn pr_url(&self, number: u64) -> String {
-        format!(
-            "https://github.com/{}/{}/pull/{}",
-            self.owner, self.repo, number
-        )
     }
 }
 
