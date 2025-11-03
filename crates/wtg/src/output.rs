@@ -250,9 +250,14 @@ fn display_issue_section(issue: &crate::github::IssueInfo) {
         issue.number.to_string().cyan()
     );
 
-    // Issue author (who's whining)
+    // Issue author
     if let Some(author) = &issue.author {
-        print_author_subsection("Who's whining:", author, "", issue.author_url.as_deref());
+        print_author_subsection(
+            "Who spotted the trouble:",
+            author,
+            "",
+            issue.author_url.as_deref(),
+        );
     }
 
     // Issue description
@@ -275,12 +280,12 @@ fn display_missing_info(info: &EnrichedInfo) {
             if issue.state == octocrab::models::IssueState::Closed {
                 "🔍 Issue closed, but the trail's cold. Some stealthy hero dropped a fix and vanished without a PR."
             } else {
-                "🔍 Couldn't trace this issue, still open. No one cares, probably!"
+                "🔍 Couldn't trace this issue, still open. Waiting for a brave soul to pick it up..."
             }
         } else if issue.state == octocrab::models::IssueState::Closed {
             "🤷 Issue closed, but no PR found... Some stealthy hero dropped a fix and vanished without a PR."
         } else {
-            "🤷 No PR found for this issue... no one cares, probably!"
+            "🤷 No PR found for this issue... still hunting for the fix!"
         };
         println!("{}", message.yellow().italic());
         println!();

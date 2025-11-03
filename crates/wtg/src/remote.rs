@@ -31,25 +31,25 @@ pub fn check_remote_and_snark(remote_info: Option<(String, String)>, repo_path: 
                         {
                             if url.contains("gitlab") {
                                 println!(
-                                            "{}",
-                                            "💸 Ooh, GitLab? Too cheap for GitHub? I get it, Microsoft wants all your money."
-                                                .yellow()
-                                                .italic()
-                                        );
+                                    "{}",
+                                    "🦊 GitLab spotted! Living that self-hosted life, I see..."
+                                        .yellow()
+                                        .italic()
+                                );
                             } else if url.contains("bitbucket") {
                                 println!(
-                                            "{}",
-                                            "💸 Bitbucket, eh? Too cheap for GitHub? I get it, Microsoft wants all your money."
-                                                .yellow()
-                                                .italic()
-                                        );
+                                    "{}",
+                                    "🪣 Bitbucket, eh? Taking the scenic route!"
+                                        .yellow()
+                                        .italic()
+                                );
                             } else if !url.contains("github") {
                                 println!(
-                                            "{}",
-                                            "💸 Non-GitHub remote? Too cheap for GitHub? I get it, Microsoft wants all your money."
-                                                .yellow()
-                                                .italic()
-                                        );
+                                    "{}",
+                                    "🌐 A custom git remote? Look at you being all independent!"
+                                        .yellow()
+                                        .italic()
+                                );
                             }
 
                             println!(
