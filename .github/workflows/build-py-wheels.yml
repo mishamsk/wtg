@@ -51,7 +51,7 @@ jobs:
         env:
           VERSION_SUFFIX: ${{ inputs.version_suffix }}
         run: |
-          sed -i 's/^version = "\(.*\)"/version = "\1.'"$VERSION_SUFFIX"'"/' Cargo.toml
+          sed -i 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
       - name: "Build sdist"
         uses: PyO3/maturin-action@v1
@@ -93,7 +93,7 @@ jobs:
         env:
           VERSION_SUFFIX: ${{ inputs.version_suffix }}
         run: |
-          sed -i '' 's/^version = "\(.*\)"/version = "\1.'"$VERSION_SUFFIX"'"/' Cargo.toml
+          sed -i '' 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
       - name: "Build wheels"
         uses: PyO3/maturin-action@v1
@@ -132,7 +132,7 @@ jobs:
         env:
           VERSION_SUFFIX: ${{ inputs.version_suffix }}
         run: |
-          sed -i 's/^version = "\(.*\)"/version = "\1.'"$VERSION_SUFFIX"'"/' Cargo.toml
+          sed -i 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
       - name: "Build wheels"
         uses: PyO3/maturin-action@v1
@@ -171,7 +171,7 @@ jobs:
         env:
           VERSION_SUFFIX: ${{ inputs.version_suffix }}
         run: |
-          sed -i 's/^version = "\(.*\)"/version = "\1.'"$VERSION_SUFFIX"'"/' Cargo.toml
+          sed -i 's/^version = "\(.*\)"/version = "\1-'"$VERSION_SUFFIX"'"/' Cargo.toml
           echo "Modified version to: $(grep '^version = ' Cargo.toml)"
       - name: "Build wheels"
         uses: PyO3/maturin-action@v1
