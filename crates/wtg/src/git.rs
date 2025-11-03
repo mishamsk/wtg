@@ -73,6 +73,16 @@ impl GitRepo {
         })
     }
 
+    /// Open the git repository from a specific path
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let repo = Repository::open(path).map_err(|_| WtgError::NotInGitRepo)?;
+        let repo_path = repo.path().to_path_buf();
+        Ok(Self {
+            repo: Arc::new(Mutex::new(repo)),
+            path: repo_path,
+        })
+    }
+
     /// Get the repository path
     #[must_use]
     pub fn path(&self) -> &Path {

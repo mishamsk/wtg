@@ -9,9 +9,11 @@ pub mod help;
 pub mod identifier;
 pub mod output;
 pub mod remote;
+pub mod repo_manager;
 
 use cli::Cli;
 use error::{Result, WtgError};
+use repo_manager::RepoManager;
 
 /// Run the CLI using the process arguments.
 pub fn run() -> Result<()> {
@@ -57,18 +59,40 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 }
 
 async fn run_async(cli: Cli) -> Result<()> {
-    // At this point, input is guaranteed to be Some because we check in run_with_cli
-    let input = cli.input.expect("input should be Some at this point");
+    // Parse the input to determine if it's a remote repo or local
+    let parsed_input = cli.parse_input().ok_or_else(|| WtgError::Cli {
+        message: "Invalid input".to_string(),
+        code: 1,
+    })?;
 
-    // Check git repo and remote status first
-    let git_repo = git::GitRepo::open()?;
-    let remote_info = git_repo.github_remote();
+    // Create the appropriate repo manager
+    let repo_manager = if let Some(owner) = &parsed_input.owner {
+        let repo = parsed_input.repo.as_ref().ok_or_else(|| WtgError::Cli {
+            message: "Invalid repository".to_string(),
+            code: 1,
+        })?;
+        RepoManager::remote(owner.clone(), repo.clone())?
+    } else {
+        RepoManager::local()?
+    };
 
-    // Print snarky messages if no GitHub remote
-    remote::check_remote_and_snark(remote_info, git_repo.path());
+    // Get the git repo instance
+    let git_repo = repo_manager.git_repo()?;
+
+    // Determine the remote info - either from the remote repo manager or from the local repo
+    let remote_info = if let Some(info) = repo_manager.remote_info() {
+        Some(info)
+    } else {
+        git_repo.github_remote()
+    };
+
+    // Print snarky messages if no GitHub remote (only for local repos)
+    if !repo_manager.is_remote() {
+        remote::check_remote_and_snark(remote_info.clone(), git_repo.path());
+    }
 
     // Detect what type of input we have
-    let result = Box::pin(identifier::identify(&input, git_repo)).await?;
+    let result = Box::pin(identifier::identify(&parsed_input.query, git_repo)).await?;
 
     // Display the result
     output::display(result)?;
