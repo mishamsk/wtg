@@ -22,7 +22,17 @@ classifiers = [
 wtg = "wtg_cli.cli:main"
 
 [tool.maturin]
-bindings = "pyo3"
 manifest-path = "crates/wtg-python/Cargo.toml"
 module-name = "wtg_cli._wtg"
 python-source = "src"
+bindings = "pyo3"
+strip = true
+profile = "release"
+include = [{ path = "LICENSE", format = "sdist" }]
+exclude = [
+    { path = "Cargo.lock", format = "sdist" },
+    { path = "Cargo.toml", format = "sdist" },
+]
+
+[tool.uv]
+cache-keys = [{ file = "crates/wtg-python/Cargo.toml" }]
