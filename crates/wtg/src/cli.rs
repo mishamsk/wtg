@@ -14,7 +14,7 @@ pub struct Cli {
     #[arg(value_name = "COMMIT|ISSUE|FILE|TAG|URL")]
     pub input: Option<String>,
 
-    /// GitHub repository URL to operate on (e.g., https://github.com/owner/repo)
+    /// GitHub repository URL to operate on (e.g., <https://github.com/owner/repo>)
     #[arg(short = 'r', long, value_name = "URL")]
     pub repo: Option<String>,
 
@@ -33,6 +33,7 @@ pub struct ParsedInput {
 
 impl Cli {
     /// Parse the input and -r flag to determine the repository and query
+    #[must_use]
     pub fn parse_input(&self) -> Option<ParsedInput> {
         let input = self.input.as_ref()?;
 
@@ -62,11 +63,11 @@ impl Cli {
 
 /// Parse a GitHub URL to extract owner, repo, and optional query
 /// Supports:
-/// - https://github.com/owner/repo
-/// - https://github.com/owner/repo/commit/hash
-/// - https://github.com/owner/repo/issues/123
-/// - https://github.com/owner/repo/pull/123
-/// - https://github.com/owner/repo/blob/branch/path/to/file
+/// - <https://github.com/owner/repo>
+/// - <https://github.com/owner/repo/commit/hash>
+/// - <https://github.com/owner/repo/issues/123>
+/// - <https://github.com/owner/repo/pull/123>
+/// - <https://github.com/owner/repo/blob/branch/path/to/file>
 fn parse_github_url(url: &str) -> Option<ParsedInput> {
     if !url.contains("github.com") {
         return None;
@@ -121,7 +122,7 @@ fn parse_github_url(url: &str) -> Option<ParsedInput> {
     })
 }
 
-/// Parse a simple GitHub repo URL (owner/repo or https://github.com/owner/repo)
+/// Parse a simple GitHub repo URL (owner/repo or <https://github.com/owner/repo>)
 fn parse_github_repo_url(url: &str) -> Option<(String, String)> {
     // Handle SSH format
     if url.starts_with("git@") {

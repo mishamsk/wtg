@@ -1,7 +1,7 @@
 use crate::error::{Result, WtgError};
 use crate::git::GitRepo;
 use git2::{FetchOptions, RemoteCallbacks, Repository};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Manages repository access for both local and remote repositories
@@ -30,13 +30,13 @@ impl RepoManager {
     /// This will clone the repo to a cache directory if needed
     pub fn remote(owner: String, repo: String) -> Result<Self> {
         let cache_dir = get_cache_dir()?;
-        let repo_cache_path = cache_dir.join(format!("{}/{}", owner, repo));
+        let repo_cache_path = cache_dir.join(format!("{owner}/{repo}"));
 
         // Check if already cloned
         if repo_cache_path.exists() && Repository::open(&repo_cache_path).is_ok() {
             // Try to update it
             if let Err(e) = update_remote_repo(&repo_cache_path) {
-                eprintln!("Warning: Failed to update cached repo: {}", e);
+                eprintln!("Warning: Failed to update cached repo: {e}");
                 // Continue anyway - use the cached version
             }
         } else {
@@ -52,22 +52,25 @@ impl RepoManager {
         })
     }
 
-    /// Get the GitRepo instance for this managed repository
+    /// Get the `GitRepo` instance for this managed repository
     pub fn git_repo(&self) -> Result<GitRepo> {
         GitRepo::from_path(&self.local_path)
     }
 
     /// Get the repository path
-    pub fn path(&self) -> &PathBuf {
+    #[must_use]
+    pub const fn path(&self) -> &PathBuf {
         &self.local_path
     }
 
     /// Check if this is a remote repository
+    #[must_use]
     pub const fn is_remote(&self) -> bool {
         self.is_remote
     }
 
     /// Get the owner/repo info (only for remote repos)
+    #[must_use]
     pub fn remote_info(&self) -> Option<(String, String)> {
         if self.is_remote {
             Some((self.owner.clone()?, self.repo_name.clone()?))
@@ -97,15 +100,15 @@ fn get_cache_dir() -> Result<PathBuf> {
 }
 
 /// Clone a remote repository using subprocess with filter=blob:none, falling back to git2 if needed
-fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<()> {
+fn clone_remote_repo(owner: &str, repo: &str, target_path: &Path) -> Result<()> {
     // Create parent directory
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let repo_url = format!("https://github.com/{}/{}.git", owner, repo);
+    let repo_url = format!("https://github.com/{owner}/{repo}.git");
 
-    eprintln!("🔄 Cloning remote repository {}...", repo_url);
+    eprintln!("🔄 Cloning remote repository {repo_url}...");
 
     // Try subprocess with --filter=blob:none first (requires Git 2.17+)
     match clone_with_filter(&repo_url, target_path) {
@@ -114,10 +117,7 @@ fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<(
             Ok(())
         }
         Err(e) => {
-            eprintln!(
-                "⚠️  Filter clone failed ({}), falling back to bare clone...",
-                e
-            );
+            eprintln!("⚠️  Filter clone failed ({e}), falling back to bare clone...");
             // Fall back to git2 bare clone
             clone_bare_with_git2(&repo_url, target_path)
         }
@@ -125,7 +125,7 @@ fn clone_remote_repo(owner: &str, repo: &str, target_path: &PathBuf) -> Result<(
 }
 
 /// Clone with --filter=blob:none using subprocess
-fn clone_with_filter(repo_url: &str, target_path: &PathBuf) -> Result<()> {
+fn clone_with_filter(repo_url: &str, target_path: &Path) -> Result<()> {
     let output = Command::new("git")
         .args([
             "clone",
@@ -143,17 +143,16 @@ fn clone_with_filter(repo_url: &str, target_path: &PathBuf) -> Result<()> {
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
-        return Err(WtgError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to clone with filter: {}", error),
-        )));
+        return Err(WtgError::Io(std::io::Error::other(format!(
+            "Failed to clone with filter: {error}"
+        ))));
     }
 
     Ok(())
 }
 
 /// Clone bare repository using git2 (fallback)
-fn clone_bare_with_git2(repo_url: &str, target_path: &PathBuf) -> Result<()> {
+fn clone_bare_with_git2(repo_url: &str, target_path: &Path) -> Result<()> {
     // Clone without progress output for cleaner UX
     let callbacks = RemoteCallbacks::new();
 
@@ -192,7 +191,7 @@ fn update_remote_repo(repo_path: &PathBuf) -> Result<()> {
 }
 
 /// Fetch updates using subprocess
-fn fetch_with_subprocess(repo_path: &PathBuf) -> Result<()> {
+fn fetch_with_subprocess(repo_path: &Path) -> Result<()> {
     let output = Command::new("git")
         .args([
             "-C",
@@ -210,10 +209,9 @@ fn fetch_with_subprocess(repo_path: &PathBuf) -> Result<()> {
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
-        return Err(WtgError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to fetch: {}", error),
-        )));
+        return Err(WtgError::Io(std::io::Error::other(format!(
+            "Failed to fetch: {error}"
+        ))));
     }
 
     Ok(())
@@ -227,7 +225,7 @@ fn fetch_with_git2(repo_path: &PathBuf) -> Result<()> {
     let mut remote = repo
         .find_remote("origin")
         .or_else(|_| repo.find_remote("upstream"))
-        .map_err(|e| WtgError::Git(e))?;
+        .map_err(WtgError::Git)?;
 
     // Fetch without progress output for cleaner UX
     let callbacks = RemoteCallbacks::new();

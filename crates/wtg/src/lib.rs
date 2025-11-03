@@ -80,11 +80,9 @@ async fn run_async(cli: Cli) -> Result<()> {
     let git_repo = repo_manager.git_repo()?;
 
     // Determine the remote info - either from the remote repo manager or from the local repo
-    let remote_info = if let Some(info) = repo_manager.remote_info() {
-        Some(info)
-    } else {
-        git_repo.github_remote()
-    };
+    let remote_info = repo_manager
+        .remote_info()
+        .map_or_else(|| git_repo.github_remote(), Some);
 
     // Print snarky messages if no GitHub remote (only for local repos)
     if !repo_manager.is_remote() {
