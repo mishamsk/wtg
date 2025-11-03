@@ -1,8 +1,9 @@
 use octocrab::{
-    Octocrab,
+    Octocrab, OctocrabBuilder,
     models::{Event as TimelineEventType, timelines::TimelineEvent},
 };
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
@@ -62,18 +63,36 @@ impl GitHubClient {
 
     /// Build an authenticated octocrab client
     fn build_client() -> Option<Octocrab> {
+        // Set reasonable timeouts: 5s connect, 30s read/write
+        let connect_timeout = Some(Duration::from_secs(5));
+        let read_timeout = Some(Duration::from_secs(30));
+
         // Try GITHUB_TOKEN env var first
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-            return Octocrab::builder().personal_token(token).build().ok();
+            return OctocrabBuilder::new()
+                .personal_token(token)
+                .set_connect_timeout(connect_timeout)
+                .set_read_timeout(read_timeout)
+                .build()
+                .ok();
         }
 
         // Try reading from gh CLI config
         if let Some(token) = Self::read_gh_config() {
-            return Octocrab::builder().personal_token(token).build().ok();
+            return OctocrabBuilder::new()
+                .personal_token(token)
+                .set_connect_timeout(connect_timeout)
+                .set_read_timeout(read_timeout)
+                .build()
+                .ok();
         }
 
         // Fall back to anonymous
-        Octocrab::builder().build().ok()
+        OctocrabBuilder::new()
+            .set_connect_timeout(connect_timeout)
+            .set_read_timeout(read_timeout)
+            .build()
+            .ok()
     }
 
     /// Read GitHub token from gh CLI config (cross-platform)

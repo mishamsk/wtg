@@ -3,6 +3,19 @@ use std::fmt;
 
 pub type Result<T> = std::result::Result<T, WtgError>;
 
+/// Check if an octocrab error is a rate limit error
+fn is_rate_limit_error(err: &octocrab::Error) -> bool {
+    if let octocrab::Error::GitHub { source, .. } = err {
+        // HTTP 403 with rate limit message, or HTTP 429 (secondary rate limit)
+        let status = source.status_code.as_u16();
+        (status == 403
+            && (source.message.contains("rate limit") || source.message.contains("API rate limit")))
+            || status == 429
+    } else {
+        false
+    }
+}
+
 #[derive(Debug)]
 pub enum WtgError {
     NotInGitRepo,
@@ -48,7 +61,30 @@ impl fmt::Display for WtgError {
                 writeln!(f, "   {}: {}", "Input was".yellow(), input.as_str().cyan())
             }
             Self::Git(e) => write!(f, "Git error: {e}"),
-            Self::GitHub(e) => write!(f, "GitHub error: {e}"),
+            Self::GitHub(e) => {
+                if is_rate_limit_error(e) {
+                    writeln!(
+                        f,
+                        "{}",
+                        "⏱️  Whoa there, speed demon! GitHub says you're moving too fast."
+                            .yellow()
+                            .bold()
+                    )?;
+                    writeln!(f)?;
+                    writeln!(
+                        f,
+                        "   {}",
+                        "You've hit the rate limit. Maybe take a coffee break? ☕".yellow()
+                    )?;
+                    writeln!(
+                        f,
+                        "   {}",
+                        "Or set a GITHUB_TOKEN to get higher limits.".yellow()
+                    )
+                } else {
+                    write!(f, "GitHub error: {e}")
+                }
+            }
             Self::NetworkUnavailable => {
                 writeln!(
                     f,
