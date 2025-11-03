@@ -59,9 +59,9 @@ jobs:
     name: Publish to crates.io
     needs: [validate-version, test, build-wheels]
     runs-on: ubuntu-latest
-    environment: release
+    environment: crates
     permissions:
-      id-token: write  # Required for OIDC token exchange
+      id-token: write # Required for OIDC token exchange
       contents: read
     steps:
       - uses: actions/checkout@v5
@@ -85,8 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write      # For PyPI's trusted publishing
-      attestations: write  # For generating artifact attestation
+      id-token: write # For PyPI's trusted publishing
+      attestations: write # For generating artifact attestation
       contents: read
     steps:
       - name: Install uv
