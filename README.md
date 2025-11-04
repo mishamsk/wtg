@@ -4,6 +4,21 @@ A snarky but helpful CLI tool to identify git commits, issues, PRs and file chan
 
 A totally vibe-coded tool, so do not blame me if it hurts your feelings. 😄
 
+[![PyPI](https://img.shields.io/pypi/v/wtg-cli)](https://pypi.org/project/wtg-cli/)
+[![Crates.io](https://img.shields.io/crates/v/wtg-cli)](https://crates.io/crates/wtg-cli)
+
+## Demo
+
+<p align="center">
+   <img src="assets/demo.gif" alt="Demo" width="600" height="600" />
+</p>
+
+**Try it yourself!**
+
+```bash
+uvx --from wtg-cli wtg https://github.com/go-task/task/issues/1322
+```
+
 ## Features
 
 - 🔍 **Smart Detection**: Automatically identifies what you're looking for (commit hash, issue/PR number, file path, or tag)
