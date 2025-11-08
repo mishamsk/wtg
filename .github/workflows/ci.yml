@@ -93,6 +93,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # need this for integration tests
+          fetch-depth: 0
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
