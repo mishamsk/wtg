@@ -6,6 +6,7 @@ A totally vibe-coded tool, so do not blame me if it hurts your feelings. 😄
 
 [![PyPI](https://img.shields.io/pypi/v/wtg-cli)](https://pypi.org/project/wtg-cli/)
 [![Crates.io](https://img.shields.io/crates/v/wtg-cli)](https://crates.io/crates/wtg-cli)
+[![CI](https://github.com/mishamsk/wtg/actions/workflows/ci.yml/badge.svg)](https://github.com/mishamsk/wtg/actions/workflows/ci.yml)
 
 ## Demo
 
