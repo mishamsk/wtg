@@ -1,0 +1,16 @@
+---
+source: crates/wtg/tests/integration.rs
+expression: snapshot
+---
+result_type: enriched
+entry_point: "Commit(\"6146f62054c1eb14792be673275f8bc9a2e223f3\")"
+commit_message: improve language
+commit_author: mishamsk
+has_commit_url: true
+has_pr: false
+has_issue: false
+release_name: v0.1.0
+release_is_semver: true
+tag_name: ~
+file_path: ~
+previous_authors_count: ~

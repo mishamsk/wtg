@@ -93,15 +93,23 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # need this for integration tests
+          fetch-depth: 0
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
+      - name: Install cargo-nextest
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-nextest
+          locked: true
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
       - name: Basic build
         run: just build
       - name: Tests
-        run: just test
+        run: just test-ci

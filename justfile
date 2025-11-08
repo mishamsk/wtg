@@ -20,7 +20,13 @@ lint-fix:
     cargo clippy --workspace --all-targets --all-features --tests --locked --fix --allow-dirty --allow-staged -- -D warnings
 
 test:
-    cargo test --workspace --all-features
+    cargo nextest run --workspace --all-features -E 'not test(integration_)'
+
+test-integration:
+    cargo nextest run --workspace --all-features -E 'test(integration_)'
+
+test-ci:
+    cargo nextest run --workspace --all-features --profile ci
 
 build:
     cargo build --bin wtg --all-targets --all-features
@@ -42,5 +48,5 @@ ci:
     just fmt-check
     just lint
     just build
-    just test
+    just test-ci
     just udeps
