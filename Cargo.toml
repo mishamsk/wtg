@@ -10,7 +10,7 @@ description = "A snarky but helpful CLI tool to identify git commits, issues, PR
 authors = ["Mike Perlov"]
 license = "MIT"
 readme = "README.md"
-keywords = ["git", "github", "cli", "tool", "release", "automation"]
+keywords = ["git", "github", "cli", "tool", "automation"]
 categories = ["command-line-utilities", "development-tools"]
 repository = "https://github.com/mishamsk/wtg"
 
