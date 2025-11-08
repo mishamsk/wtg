@@ -4,7 +4,7 @@ members = ["crates/wtg", "crates/wtg-python"]
 default-members = ["crates/wtg"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A snarky but helpful CLI tool to identify git commits, issues, PRs and file changes, and tell you which release they shipped in"
 authors = ["Mike Perlov"]
