@@ -3,7 +3,11 @@ use octocrab::{
     models::{Event as TimelineEventType, timelines::TimelineEvent},
 };
 use serde::Deserialize;
-use std::time::Duration;
+use std::{future::Future, time::Duration};
+
+const CONNECT_TIMEOUT_SECS: u64 = 5;
+const READ_TIMEOUT_SECS: u64 = 30;
+const REQUEST_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
@@ -64,8 +68,8 @@ impl GitHubClient {
     /// Build an authenticated octocrab client
     fn build_client() -> Option<Octocrab> {
         // Set reasonable timeouts: 5s connect, 30s read/write
-        let connect_timeout = Some(Duration::from_secs(5));
-        let read_timeout = Some(Duration::from_secs(30));
+        let connect_timeout = Some(Self::connect_timeout());
+        let read_timeout = Some(Self::read_timeout());
 
         // Try GITHUB_TOKEN env var first
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
@@ -136,11 +140,9 @@ impl GitHubClient {
     ) -> Option<(String, String, Option<(String, String)>)> {
         let client = self.client.as_ref()?;
 
-        let commit = client
-            .commits(&self.owner, &self.repo)
-            .get(commit_hash)
-            .await
-            .ok()?;
+        let commit =
+            Self::await_with_timeout(client.commits(&self.owner, &self.repo).get(commit_hash))
+                .await?;
 
         let commit_url = commit.html_url;
         let author_info = commit
@@ -154,7 +156,9 @@ impl GitHubClient {
     pub async fn fetch_pr(&self, number: u64) -> Option<PullRequestInfo> {
         let client = self.client.as_ref()?;
 
-        if let Ok(pr) = client.pulls(&self.owner, &self.repo).get(number).await {
+        if let Some(pr) =
+            Self::await_with_timeout(client.pulls(&self.owner, &self.repo).get(number)).await
+        {
             let author = pr.user.as_ref().map(|u| u.login.clone());
             let author_url = pr.user.as_ref().map(|u| u.html_url.to_string());
             let created_at = pr.created_at.map(|dt| dt.to_string());
@@ -179,8 +183,8 @@ impl GitHubClient {
     pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
         let client = self.client.as_ref()?;
 
-        match client.issues(&self.owner, &self.repo).get(number).await {
-            Ok(issue) => {
+        match Self::await_with_timeout(client.issues(&self.owner, &self.repo).get(number)).await {
+            Some(issue) => {
                 // If it has a pull_request field, it's actually a PR - skip it
                 if issue.pull_request.is_some() {
                     return None;
@@ -210,7 +214,7 @@ impl GitHubClient {
                     created_at,
                 })
             }
-            Err(_) => None,
+            None => None,
         }
     }
 
@@ -223,12 +227,14 @@ impl GitHubClient {
 
         let mut closing_prs = Vec::new();
 
-        let Ok(mut page) = client
-            .issues(&self.owner, &self.repo)
-            .list_timeline_events(issue_number)
-            .per_page(100)
-            .send()
-            .await
+        let Some(mut page) = Self::await_with_timeout(
+            client
+                .issues(&self.owner, &self.repo)
+                .list_timeline_events(issue_number)
+                .per_page(100)
+                .send(),
+        )
+        .await
         else {
             return closing_prs;
         };
@@ -248,10 +254,8 @@ impl GitHubClient {
                 }
             }
 
-            match client
-                .get_page::<TimelineEvent>(&page.next)
+            match Self::await_with_timeout(client.get_page::<TimelineEvent>(&page.next))
                 .await
-                .ok()
                 .flatten()
             {
                 Some(next_page) => page = next_page,
@@ -287,16 +291,17 @@ impl GitHubClient {
         });
 
         loop {
-            let page_result = client
-                .repos(&self.owner, &self.repo)
-                .releases()
-                .list()
-                .per_page(per_page)
-                .page(page_num)
-                .send()
-                .await;
-
-            let Ok(page) = page_result else {
+            let Some(page) = Self::await_with_timeout(
+                client
+                    .repos(&self.owner, &self.repo)
+                    .releases()
+                    .list()
+                    .per_page(per_page)
+                    .page(page_num)
+                    .send(),
+            )
+            .await
+            else {
                 break; // Stop on error
             };
 
@@ -339,12 +344,13 @@ impl GitHubClient {
     /// Fetch a GitHub release by tag.
     pub async fn fetch_release_by_tag(&self, tag: &str) -> Option<ReleaseInfo> {
         let client = self.client.as_ref()?;
-        let release = client
-            .repos(&self.owner, &self.repo)
-            .releases()
-            .get_by_tag(tag)
-            .await
-            .ok()?;
+        let release = Self::await_with_timeout(
+            client
+                .repos(&self.owner, &self.repo)
+                .releases()
+                .get_by_tag(tag),
+        )
+        .await?;
 
         Some(ReleaseInfo {
             tag_name: release.tag_name,
@@ -388,6 +394,27 @@ impl GitHubClient {
             "https://github.com/{}",
             utf8_percent_encode(username, NON_ALPHANUMERIC)
         )
+    }
+    const fn connect_timeout() -> Duration {
+        Duration::from_secs(CONNECT_TIMEOUT_SECS)
+    }
+
+    const fn read_timeout() -> Duration {
+        Duration::from_secs(READ_TIMEOUT_SECS)
+    }
+
+    const fn request_timeout() -> Duration {
+        Duration::from_secs(REQUEST_TIMEOUT_SECS)
+    }
+
+    async fn await_with_timeout<F, T>(future: F) -> Option<T>
+    where
+        F: Future<Output = octocrab::Result<T>>,
+    {
+        match tokio::time::timeout(Self::request_timeout(), future).await {
+            Ok(Ok(value)) => Some(value),
+            _ => None,
+        }
     }
 }
 

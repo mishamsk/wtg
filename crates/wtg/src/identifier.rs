@@ -69,7 +69,7 @@ pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
     // Try as issue/PR number (if it's all digits or starts with #)
     let number_str = input.strip_prefix('#').unwrap_or(input);
     if let Ok(number) = number_str.parse::<u64>()
-        && let Some(result) = Box::pin(resolve_number(number, &git, github.as_deref())).await
+        && let Some(result) = resolve_number(number, &git, github.as_deref()).await
     {
         return Ok(result);
     }
@@ -126,7 +126,7 @@ async fn resolve_number(
 ) -> Option<IdentifiedThing> {
     let gh = github?;
 
-    if let Some(pr_info) = gh.fetch_pr(number).await {
+    if let Some(pr_info) = Box::pin(gh.fetch_pr(number)).await {
         if let Some(merge_sha) = &pr_info.merge_commit_sha
             && let Some(commit_info) = git.find_commit(merge_sha)
         {
@@ -159,9 +159,9 @@ async fn resolve_number(
         })));
     }
 
-    if let Some(issue_info) = gh.fetch_issue(number).await {
+    if let Some(issue_info) = Box::pin(gh.fetch_issue(number)).await {
         if let Some(&first_pr_number) = issue_info.closing_prs.first()
-            && let Some(pr_info) = gh.fetch_pr(first_pr_number).await
+            && let Some(pr_info) = Box::pin(gh.fetch_pr(first_pr_number)).await
         {
             if let Some(merge_sha) = &pr_info.merge_commit_sha
                 && let Some(commit_info) = git.find_commit(merge_sha)
