@@ -26,6 +26,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Security
 -
 
+## [0.1.1] - 2025-11-07
+
+### Added
+- Support for GitHub comment and PR tab URLs.
+
+### Fixed
+- Fixed fetching remote repositories with moved tags.
+- Fixed file history detection.
+- Added outer timeouts to ensure they are honored.
+
+### Security
+- URL sanitization in GitHub URL parsing.
+
 ## [0.1.0] - 2025-11-03
 
 ### Why This Even Exists
