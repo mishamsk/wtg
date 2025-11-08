@@ -416,8 +416,40 @@ fn commit_touches_file(commit: &Commit, path: &str) -> bool {
         return false;
     };
 
-    // Check if the file exists in this commit's tree
-    tree.get_path(Path::new(path)).is_ok()
+    let target_path = Path::new(path);
+    let current_entry = tree.get_path(target_path).ok();
+
+    // Root commit: if the file exists now, this commit introduced it
+    if commit.parent_count() == 0 {
+        return current_entry.is_some();
+    }
+
+    for parent in commit.parents() {
+        let Ok(parent_tree) = parent.tree() else {
+            continue;
+        };
+
+        let previous_entry = parent_tree.get_path(target_path).ok();
+        if tree_entries_differ(current_entry.as_ref(), previous_entry.as_ref()) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn tree_entries_differ(
+    current: Option<&git2::TreeEntry<'_>>,
+    previous: Option<&git2::TreeEntry<'_>>,
+) -> bool {
+    match (current, previous) {
+        (None, None) => false,
+        (Some(_), None) | (None, Some(_)) => true,
+        (Some(current_entry), Some(previous_entry)) => {
+            current_entry.id() != previous_entry.id()
+                || current_entry.filemode() != previous_entry.filemode()
+        }
+    }
 }
 
 /// Regex for parsing semantic versions with various formats
@@ -521,6 +553,8 @@ fn format_git_time(time: &Time) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_parse_semver_2_part() {
@@ -759,5 +793,149 @@ mod tests {
         assert!(parse_semver("1").is_none());
         assert!(parse_semver("1.2.3.4.5").is_none());
         assert!(parse_semver("abc.def").is_none());
+    }
+
+    #[test]
+    fn file_history_tracks_content_and_metadata_changes() {
+        const ORIGINAL_PATH: &str = "config/policy.json";
+        const RENAMED_PATH: &str = "config/policy-renamed.json";
+        const EXECUTABLE_PATH: &str = "scripts/run.sh";
+        const DELETED_PATH: &str = "docs/legacy.md";
+        const DISTRACTION_PATH: &str = "README.md";
+
+        let temp = tempdir().expect("temp dir");
+        let repo = Repository::init(temp.path()).expect("git repo");
+
+        commit_file(&repo, DISTRACTION_PATH, "noise", "add distraction");
+        commit_file(&repo, ORIGINAL_PATH, "{\"version\":1}", "seed config");
+        commit_file(&repo, ORIGINAL_PATH, "{\"version\":2}", "config tweak");
+        let rename_commit = rename_file(&repo, ORIGINAL_PATH, RENAMED_PATH, "rename config");
+        let post_rename_commit = commit_file(
+            &repo,
+            RENAMED_PATH,
+            "{\"version\":3}",
+            "update renamed config",
+        );
+
+        commit_file(
+            &repo,
+            EXECUTABLE_PATH,
+            "#!/bin/sh\\nprintf hi\n",
+            "add runner",
+        );
+        let exec_mode_commit = change_file_mode(
+            &repo,
+            EXECUTABLE_PATH,
+            git2::FileMode::BlobExecutable,
+            "make runner executable",
+        );
+
+        commit_file(&repo, DELETED_PATH, "bye", "add temporary file");
+        let delete_commit = delete_file(&repo, DELETED_PATH, "remove temporary file");
+
+        let git_repo = GitRepo::from_path(temp.path()).expect("git repo wrapper");
+
+        let renamed_info = git_repo.find_file(RENAMED_PATH).expect("renamed file info");
+        assert_eq!(
+            renamed_info.last_commit.hash,
+            post_rename_commit.to_string()
+        );
+
+        let original_info = git_repo
+            .find_file(ORIGINAL_PATH)
+            .expect("original file info");
+        assert_eq!(original_info.last_commit.hash, rename_commit.to_string());
+
+        let exec_info = git_repo.find_file(EXECUTABLE_PATH).expect("exec file info");
+        assert_eq!(exec_info.last_commit.hash, exec_mode_commit.to_string());
+
+        let deleted_info = git_repo.find_file(DELETED_PATH).expect("deleted file info");
+        assert_eq!(deleted_info.last_commit.hash, delete_commit.to_string());
+    }
+
+    fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> git2::Oid {
+        let workdir = repo.workdir().expect("workdir");
+        let file_path = workdir.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).expect("create dir");
+        }
+        fs::write(&file_path, contents).expect("write file");
+
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new(path)).expect("add path");
+        write_tree_and_commit(repo, &mut index, message)
+    }
+
+    fn rename_file(repo: &Repository, from: &str, to: &str, message: &str) -> git2::Oid {
+        let workdir = repo.workdir().expect("workdir");
+        let from_path = workdir.join(from);
+        let to_path = workdir.join(to);
+        if let Some(parent) = to_path.parent() {
+            fs::create_dir_all(parent).expect("create dir");
+        }
+        fs::rename(&from_path, &to_path).expect("rename file");
+
+        let mut index = repo.index().expect("index");
+        index.remove_path(Path::new(from)).expect("remove old path");
+        index.add_path(Path::new(to)).expect("add new path");
+        write_tree_and_commit(repo, &mut index, message)
+    }
+
+    fn delete_file(repo: &Repository, path: &str, message: &str) -> git2::Oid {
+        let workdir = repo.workdir().expect("workdir");
+        let file_path = workdir.join(path);
+        if file_path.exists() {
+            fs::remove_file(&file_path).expect("remove file");
+        }
+
+        let mut index = repo.index().expect("index");
+        index.remove_path(Path::new(path)).expect("remove path");
+        write_tree_and_commit(repo, &mut index, message)
+    }
+
+    fn change_file_mode(
+        repo: &Repository,
+        path: &str,
+        mode: git2::FileMode,
+        message: &str,
+    ) -> git2::Oid {
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new(path)).expect("add path");
+        force_index_mode(&mut index, path, mode);
+        write_tree_and_commit(repo, &mut index, message)
+    }
+
+    fn force_index_mode(index: &mut git2::Index, path: &str, mode: git2::FileMode) {
+        if let Some(mut entry) = index.get_path(Path::new(path), 0) {
+            entry.mode = u32::try_from(i32::from(mode)).expect("valid file mode");
+            index.add(&entry).expect("re-add entry");
+        }
+    }
+
+    fn write_tree_and_commit(
+        repo: &Repository,
+        index: &mut git2::Index,
+        message: &str,
+    ) -> git2::Oid {
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("tree oid");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        let sig = test_signature();
+
+        let parents = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| repo.find_commit(oid).ok())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let parent_refs = parents.iter().collect::<Vec<_>>();
+
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+    }
+
+    fn test_signature() -> git2::Signature<'static> {
+        git2::Signature::now("Test User", "tester@example.com").expect("sig")
     }
 }
