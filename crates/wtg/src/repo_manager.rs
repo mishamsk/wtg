@@ -192,20 +192,9 @@ fn update_remote_repo(repo_path: &PathBuf) -> Result<()> {
 
 /// Fetch updates using subprocess
 fn fetch_with_subprocess(repo_path: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            repo_path.to_str().ok_or_else(|| {
-                WtgError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Invalid path",
-                ))
-            })?,
-            "fetch",
-            "--all",
-            "--tags",
-        ])
-        .output()?;
+    let args = build_fetch_args(repo_path)?;
+
+    let output = Command::new("git").args(&args).output()?;
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
@@ -215,6 +204,29 @@ fn fetch_with_subprocess(repo_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Build the arguments passed to `git fetch` when refreshing cached repos.
+///
+/// Keeping this logic isolated lets us sanity-check the flags in unit tests so
+/// we don't regress on rejected tag updates again.
+fn build_fetch_args(repo_path: &Path) -> Result<Vec<String>> {
+    let repo_path = repo_path.to_str().ok_or_else(|| {
+        WtgError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid path",
+        ))
+    })?;
+
+    Ok(vec![
+        "-C".to_string(),
+        repo_path.to_string(),
+        "fetch".to_string(),
+        "--all".to_string(),
+        "--tags".to_string(),
+        "--force".to_string(),
+        "--prune".to_string(),
+    ])
 }
 
 /// Fetch updates using git2 (fallback)

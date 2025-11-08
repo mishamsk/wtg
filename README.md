@@ -93,7 +93,7 @@ wtg https://github.com/astral-sh/uv/pull/123
 wtg https://github.com/astral-sh/uv/blob/main/README.md
 ```
 
-**Note**: Remote repositories are cached in your system's cache directory for faster subsequent queries. The cache uses `--filter=blob:none` (Git 2.17+) for minimal disk usage, with automatic fallback to bare clones on older Git versions.
+**Note**: Remote repositories are cached in your system's cache directory for faster subsequent queries. The cache uses `--filter=blob:none` (Git 2.17+) for minimal disk usage, with automatic fallback to bare clones on older Git versions. On macOS this lives under `~/Library/Caches/wtg/repos`, on Linux it defaults to `~/.cache/wtg/repos`, and on Windows it follows `%LOCALAPPDATA%\wtg\repos`.
 
 ## Output Examples
 
