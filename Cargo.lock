@@ -2260,6 +2260,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "tokio",
+ "url",
 ]
 
 [[package]]
