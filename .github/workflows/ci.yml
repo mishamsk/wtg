@@ -104,4 +104,4 @@ jobs:
       - name: Basic build
         run: just build
       - name: Tests
-        run: just test
+        run: just test-ci

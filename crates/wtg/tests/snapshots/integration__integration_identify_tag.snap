@@ -1,0 +1,16 @@
+---
+source: crates/wtg/tests/integration.rs
+expression: snapshot
+---
+result_type: tag_only
+entry_point: ~
+commit_message: ~
+commit_author: ~
+has_commit_url: true
+has_pr: false
+has_issue: false
+release_name: ~
+release_is_semver: true
+tag_name: v0.1.0
+file_path: ~
+previous_authors_count: ~

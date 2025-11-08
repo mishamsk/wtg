@@ -1,0 +1,16 @@
+---
+source: crates/wtg/tests/integration.rs
+expression: snapshot
+---
+result_type: file
+entry_point: ~
+commit_message: Initial commit
+commit_author: Mike Perlov
+has_commit_url: true
+has_pr: false
+has_issue: false
+release_name: v0.1.0
+release_is_semver: true
+tag_name: ~
+file_path: LICENSE
+previous_authors_count: 0

@@ -47,6 +47,12 @@ regex = "1.12"
 percent-encoding = "2.3"
 url = "2.5"
 
+# Test dependencies
+rstest = "0.26"
+insta = { version = "1.43", features = ["yaml"] }
+zip = "6.0"
+tempfile = "3.23"
+
 [profile.release]
 codegen-units = 3
 lto = "thin"
