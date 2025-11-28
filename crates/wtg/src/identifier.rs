@@ -160,40 +160,55 @@ async fn resolve_number(
     }
 
     if let Some(issue_info) = Box::pin(gh.fetch_issue(number)).await {
-        if let Some(&first_pr_number) = issue_info.closing_prs.first()
-            && let Some(pr_info) = Box::pin(gh.fetch_pr(first_pr_number)).await
-        {
-            if let Some(merge_sha) = &pr_info.merge_commit_sha
-                && let Some(commit_info) = git.find_commit(merge_sha)
-            {
-                let (commit_url, commit_author_github_url) =
-                    resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash)
-                        .await;
+        if let Some(first_pr_ref) = issue_info.closing_prs.first() {
+            // Create a GitHub client for the PR's repository (might be cross-repo)
+            let pr_gh_owned;
+            let pr_gh = if first_pr_ref.owner == gh.owner() && first_pr_ref.repo == gh.repo() {
+                // Same repo, reuse existing client
+                gh
+            } else {
+                // Different repo, create new client
+                pr_gh_owned = Arc::new(GitHubClient::new(
+                    first_pr_ref.owner.clone(),
+                    first_pr_ref.repo.clone(),
+                ));
+                pr_gh_owned.as_ref()
+            };
 
-                let commit_date = commit_info.date_rfc3339();
-                let release =
-                    resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date)).await;
+            if let Some(pr_info) = Box::pin(pr_gh.fetch_pr(first_pr_ref.number)).await {
+                if let Some(merge_sha) = &pr_info.merge_commit_sha
+                    && let Some(commit_info) = git.find_commit(merge_sha)
+                {
+                    let (commit_url, commit_author_github_url) =
+                        resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash)
+                            .await;
+
+                    let commit_date = commit_info.date_rfc3339();
+                    let release =
+                        resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date))
+                            .await;
+
+                    return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
+                        entry_point: EntryPoint::IssueNumber(number),
+                        commit: Some(commit_info),
+                        commit_url,
+                        commit_author_github_url,
+                        pr: Some(pr_info),
+                        issue: Some(issue_info),
+                        release,
+                    })));
+                }
 
                 return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
                     entry_point: EntryPoint::IssueNumber(number),
-                    commit: Some(commit_info),
-                    commit_url,
-                    commit_author_github_url,
+                    commit: None,
+                    commit_url: None,
+                    commit_author_github_url: None,
                     pr: Some(pr_info),
                     issue: Some(issue_info),
-                    release,
+                    release: None,
                 })));
             }
-
-            return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
-                entry_point: EntryPoint::IssueNumber(number),
-                commit: None,
-                commit_url: None,
-                commit_author_github_url: None,
-                pr: Some(pr_info),
-                issue: Some(issue_info),
-                release: None,
-            })));
         }
 
         return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use octocrab::{
     Octocrab, OctocrabBuilder,
     models::{Event as TimelineEventType, timelines::TimelineEvent},
@@ -9,9 +10,21 @@ const CONNECT_TIMEOUT_SECS: u64 = 5;
 const READ_TIMEOUT_SECS: u64 = 30;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
 
+#[derive(Debug, Deserialize)]
+struct GhConfig {
+    #[serde(rename = "github.com")]
+    github_com: GhHostConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhHostConfig {
+    oauth_token: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
-    client: Option<Octocrab>,
+    auth_client: Option<Octocrab>,
+    anonymous_client: Option<Octocrab>,
     owner: String,
     repo: String,
 }
@@ -30,6 +43,14 @@ pub struct PullRequestInfo {
     pub created_at: Option<String>, // When the PR was created
 }
 
+/// Reference to a PR that may be in a different repository
+#[derive(Debug, Clone)]
+pub struct PullRequestRef {
+    pub number: u64,
+    pub owner: String,
+    pub repo: String,
+}
+
 /// Information about an Issue
 #[derive(Debug, Clone)]
 pub struct IssueInfo {
@@ -40,8 +61,8 @@ pub struct IssueInfo {
     pub url: String,
     pub author: Option<String>,
     pub author_url: Option<String>,
-    pub closing_prs: Vec<u64>,      // PR numbers that closed this issue
-    pub created_at: Option<String>, // When the issue was created
+    pub closing_prs: Vec<PullRequestRef>, // PRs that closed this issue (may be cross-repo)
+    pub created_at: Option<DateTime<Utc>>, // When the issue was created
 }
 
 #[derive(Debug, Clone)]
@@ -52,21 +73,47 @@ pub struct ReleaseInfo {
     pub published_at: Option<String>,
 }
 
+/// Check if an error is a SAML SSO enforcement error
+fn is_gh_forbidden_error(error: &octocrab::Error) -> bool {
+    match error {
+        octocrab::Error::GitHub { source, .. }
+            if source.status_code == http::StatusCode::FORBIDDEN =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
 impl GitHubClient {
+    /// Get the repository owner
+    #[must_use]
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    /// Get the repository name
+    #[must_use]
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+
     /// Create a new GitHub client with authentication
     #[must_use]
     pub fn new(owner: String, repo: String) -> Self {
-        let client = Self::build_client();
+        let auth_client = Self::build_auth_client();
+        let anonymous_client = Self::build_anonymous_client();
 
         Self {
-            client,
+            auth_client,
+            anonymous_client,
             owner,
             repo,
         }
     }
 
     /// Build an authenticated octocrab client
-    fn build_client() -> Option<Octocrab> {
+    fn build_auth_client() -> Option<Octocrab> {
         // Set reasonable timeouts: 5s connect, 30s read/write
         let connect_timeout = Some(Self::connect_timeout());
         let read_timeout = Some(Self::read_timeout());
@@ -91,7 +138,14 @@ impl GitHubClient {
                 .ok();
         }
 
-        // Fall back to anonymous
+        None
+    }
+
+    /// Build an anonymous octocrab client (no authentication)
+    fn build_anonymous_client() -> Option<Octocrab> {
+        let connect_timeout = Some(Self::connect_timeout());
+        let read_timeout = Some(Self::read_timeout());
+
         OctocrabBuilder::new()
             .set_connect_timeout(connect_timeout)
             .set_read_timeout(read_timeout)
@@ -138,7 +192,7 @@ impl GitHubClient {
         &self,
         commit_hash: &str,
     ) -> Option<(String, String, Option<(String, String)>)> {
-        let client = self.client.as_ref()?;
+        let client = self.auth_client.as_ref()?;
 
         let commit =
             Self::await_with_timeout(client.commits(&self.owner, &self.repo).get(commit_hash))
@@ -154,74 +208,132 @@ impl GitHubClient {
 
     /// Try to fetch a PR
     pub async fn fetch_pr(&self, number: u64) -> Option<PullRequestInfo> {
-        let client = self.client.as_ref()?;
+        // Try with authenticated client first
+        if let Some(client) = self.auth_client.as_ref() {
+            match Self::await_with_timeout_and_error(
+                client.pulls(&self.owner, &self.repo).get(number),
+            )
+            .await
+            {
+                Ok(pr) => return Some(Self::process_pr(pr)),
+                Err(Some(e)) if is_gh_forbidden_error(&e) => {
+                    // Fall through to try anonymous client
+                }
+                Err(_) => {
+                    // Non-SAML error or timeout, don't retry
+                    return None;
+                }
+            }
+        }
 
-        if let Some(pr) =
-            Self::await_with_timeout(client.pulls(&self.owner, &self.repo).get(number)).await
-        {
-            let author = pr.user.as_ref().map(|u| u.login.clone());
-            let author_url = pr.user.as_ref().map(|u| u.html_url.to_string());
-            let created_at = pr.created_at.map(|dt| dt.to_string());
-
-            return Some(PullRequestInfo {
-                number,
-                title: pr.title.unwrap_or_default(),
-                body: pr.body,
-                state: format!("{:?}", pr.state),
-                url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
-                merge_commit_sha: pr.merge_commit_sha,
-                author,
-                author_url,
-                created_at,
-            });
+        // Try with anonymous client (either as fallback or if no authenticated client)
+        if let Some(client) = self.anonymous_client.as_ref() {
+            match Self::await_with_timeout_and_error(
+                client.pulls(&self.owner, &self.repo).get(number),
+            )
+            .await
+            {
+                Ok(pr) => return Some(Self::process_pr(pr)),
+                Err(_) => return None,
+            }
         }
 
         None
     }
 
-    /// Try to fetch an issue
-    pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
-        let client = self.client.as_ref()?;
+    /// Process a fetched PR
+    fn process_pr(pr: octocrab::models::pulls::PullRequest) -> PullRequestInfo {
+        let author = pr.user.as_ref().map(|u| u.login.clone());
+        let author_url = pr.user.as_ref().map(|u| u.html_url.to_string());
+        let created_at = pr.created_at.map(|dt| dt.to_string());
 
-        match Self::await_with_timeout(client.issues(&self.owner, &self.repo).get(number)).await {
-            Some(issue) => {
-                // If it has a pull_request field, it's actually a PR - skip it
-                if issue.pull_request.is_some() {
-                    return None;
-                }
-
-                let author = issue.user.login.clone();
-                let author_url = Some(issue.user.html_url.to_string());
-                let created_at = Some(issue.created_at.to_string());
-
-                // OPTIMIZED: Only fetch timeline for closed issues (open issues can't have closing PRs)
-                let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
-                let closing_prs = if is_closed {
-                    self.find_closing_prs(number).await
-                } else {
-                    Vec::new()
-                };
-
-                Some(IssueInfo {
-                    number,
-                    title: issue.title,
-                    body: issue.body,
-                    state: issue.state,
-                    url: issue.html_url.to_string(),
-                    author: Some(author),
-                    author_url,
-                    closing_prs,
-                    created_at,
-                })
-            }
-            None => None,
+        PullRequestInfo {
+            number: pr.number,
+            title: pr.title.unwrap_or_default(),
+            body: pr.body,
+            state: format!("{:?}", pr.state),
+            url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+            merge_commit_sha: pr.merge_commit_sha,
+            author,
+            author_url,
+            created_at,
         }
     }
 
+    /// Try to fetch an issue
+    pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
+        // Try with authenticated client first
+        if let Some(client) = self.auth_client.as_ref() {
+            match Self::await_with_timeout_and_error(
+                client.issues(&self.owner, &self.repo).get(number),
+            )
+            .await
+            {
+                Ok(issue) => return Box::pin(self.process_issue(number, issue)).await,
+                Err(Some(e)) if is_gh_forbidden_error(&e) => {
+                    // Fall through to try anonymous client
+                }
+                Err(Some(_) | None) => {
+                    return None;
+                }
+            }
+        }
+
+        // Try with anonymous client (either as fallback or if no authenticated client)
+        if let Some(client) = self.anonymous_client.as_ref() {
+            match Self::await_with_timeout_and_error(
+                client.issues(&self.owner, &self.repo).get(number),
+            )
+            .await
+            {
+                Ok(issue) => return Box::pin(self.process_issue(number, issue)).await,
+                Err(_) => return None,
+            }
+        }
+
+        None
+    }
+
+    /// Process a fetched issue and add closing PRs if needed
+    async fn process_issue(
+        &self,
+        number: u64,
+        issue: octocrab::models::issues::Issue,
+    ) -> Option<IssueInfo> {
+        // If it has a pull_request field, it's actually a PR - skip it
+        if issue.pull_request.is_some() {
+            return None;
+        }
+
+        let author = issue.user.login.clone();
+        let author_url = Some(issue.user.html_url.to_string());
+        let created_at = Some(issue.created_at.clone());
+
+        // OPTIMIZED: Only fetch timeline for closed issues (open issues can't have closing PRs)
+        let is_closed = matches!(issue.state, octocrab::models::IssueState::Closed);
+        let closing_prs = if is_closed {
+            self.find_closing_prs(number).await
+        } else {
+            Vec::new()
+        };
+
+        Some(IssueInfo {
+            number,
+            title: issue.title,
+            body: issue.body,
+            state: issue.state,
+            url: issue.html_url.to_string(),
+            author: Some(author),
+            author_url,
+            closing_prs,
+            created_at,
+        })
+    }
+
     /// Find closing PRs for an issue by examining timeline events
-    /// Returns list of PR numbers that closed this issue
-    async fn find_closing_prs(&self, issue_number: u64) -> Vec<u64> {
-        let Some(client) = self.client.as_ref() else {
+    /// Returns list of PR references (may be from different repositories)
+    async fn find_closing_prs(&self, issue_number: u64) -> Vec<PullRequestRef> {
+        let Some(client) = self.auth_client.as_ref() else {
             return Vec::new();
         };
 
@@ -248,8 +360,25 @@ impl GitHubClient {
                     )
                 {
                     let issue = &source.issue;
-                    if issue.pull_request.is_some() && !closing_prs.contains(&issue.number) {
-                        closing_prs.push(issue.number);
+                    if issue.pull_request.is_some() {
+                        // Extract repository info from repository_url using existing parser
+                        if let Some((owner, repo)) =
+                            crate::git::parse_github_url(issue.repository_url.as_str())
+                        {
+                            let pr_ref = PullRequestRef {
+                                number: issue.number,
+                                owner,
+                                repo,
+                            };
+                            // Check if we already have this PR
+                            if !closing_prs.iter().any(|p| {
+                                p.number == pr_ref.number
+                                    && p.owner == pr_ref.owner
+                                    && p.repo == pr_ref.repo
+                            }) {
+                                closing_prs.push(pr_ref);
+                            }
+                        }
                     }
                 }
             }
@@ -275,7 +404,7 @@ impl GitHubClient {
     /// If `since_date` is provided, stop fetching releases older than this date
     /// This significantly speeds up lookups for recent PRs/issues
     pub async fn fetch_releases_since(&self, since_date: Option<&str>) -> Vec<ReleaseInfo> {
-        let Some(client) = self.client.as_ref() else {
+        let Some(client) = self.auth_client.as_ref() else {
             return Vec::new();
         };
 
@@ -343,14 +472,19 @@ impl GitHubClient {
 
     /// Fetch a GitHub release by tag.
     pub async fn fetch_release_by_tag(&self, tag: &str) -> Option<ReleaseInfo> {
-        let client = self.client.as_ref()?;
-        let release = Self::await_with_timeout(
-            client
-                .repos(&self.owner, &self.repo)
-                .releases()
-                .get_by_tag(tag),
-        )
-        .await?;
+        let tag = tag.to_string();
+        let release = self
+            .call_client_api_with_fallback(|client, gh| {
+                let tag = tag.clone();
+                Box::pin(async move {
+                    client
+                        .repos(&gh.owner, &gh.repo)
+                        .releases()
+                        .get_by_tag(tag.as_str())
+                        .await
+                })
+            })
+            .await?;
 
         Some(ReleaseInfo {
             tag_name: release.tag_name,
@@ -395,6 +529,7 @@ impl GitHubClient {
             utf8_percent_encode(username, NON_ALPHANUMERIC)
         )
     }
+
     const fn connect_timeout() -> Duration {
         Duration::from_secs(CONNECT_TIMEOUT_SECS)
     }
@@ -407,6 +542,36 @@ impl GitHubClient {
         Duration::from_secs(REQUEST_TIMEOUT_SECS)
     }
 
+    /// Call a GitHub API with fallback from authenticated to anonymous client.
+    /// Returns None on timeout or error.
+    async fn call_client_api_with_fallback<F, T>(&self, api_call: F) -> Option<T>
+    where
+        for<'a> F: Fn(
+            &'a Octocrab,
+            &'a Self,
+        )
+            -> std::pin::Pin<Box<dyn Future<Output = octocrab::Result<T>> + Send + 'a>>,
+    {
+        // Try with authenticated client first
+        if let Some(client) = self.auth_client.as_ref() {
+            match Self::await_with_timeout_and_error(api_call(client, self)).await {
+                Ok(result) => return Some(result),
+                Err(Some(e)) if is_gh_forbidden_error(&e) => {
+                    // Fall through to try anonymous client
+                }
+                Err(_) => {
+                    // Non-SAML error or timeout, don't retry
+                    return None;
+                }
+            }
+        }
+
+        // Try with anonymous client (either as fallback or if no authenticated client)
+        let client = self.anonymous_client.as_ref()?;
+        Self::await_with_timeout(api_call(client, self)).await
+    }
+
+    /// Await with timeout, returning None on timeout or error
     async fn await_with_timeout<F, T>(future: F) -> Option<T>
     where
         F: Future<Output = octocrab::Result<T>>,
@@ -416,15 +581,16 @@ impl GitHubClient {
             _ => None,
         }
     }
-}
 
-#[derive(Debug, Deserialize)]
-struct GhConfig {
-    #[serde(rename = "github.com")]
-    github_com: GhHostConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct GhHostConfig {
-    oauth_token: Option<String>,
+    /// Await with timeout, returning non-timeout error if any
+    async fn await_with_timeout_and_error<F, T>(future: F) -> Result<T, Option<octocrab::Error>>
+    where
+        F: Future<Output = octocrab::Result<T>>,
+    {
+        match tokio::time::timeout(Self::request_timeout(), future).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(e)) => Err(Some(e)),
+            Err(_) => Err(None), // Timeout, no error object
+        }
+    }
 }

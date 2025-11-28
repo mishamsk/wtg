@@ -27,6 +27,7 @@ chrono = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
 url = { workspace = true }
+http = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

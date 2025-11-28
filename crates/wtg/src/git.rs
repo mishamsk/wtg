@@ -518,7 +518,7 @@ fn is_semver_tag(tag: &str) -> bool {
 }
 
 /// Parse a GitHub URL to extract owner and repo
-fn parse_github_url(url: &str) -> Option<(String, String)> {
+pub(crate) fn parse_github_url(url: &str) -> Option<(String, String)> {
     // Handle both HTTPS and SSH URLs
     // HTTPS: https://github.com/owner/repo.git
     // SSH: git@github.com:owner/repo.git
