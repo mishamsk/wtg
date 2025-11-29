@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 - Fallback to anonymous GitHub client on public repo's in SAML protected orgs, when auth fails.
 - Properly identify closing PRs when multiple PRs reference the same issue.
+- Updated GitHub API client to latest version to fix issues with new timeline events.
 
 ### Security
 -
