@@ -1,8 +1,8 @@
-use crate::error::Result;
+use crate::error::WtgResult;
 use crate::identifier::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing};
 use crossterm::style::Stylize;
 
-pub fn display(thing: IdentifiedThing) -> Result<()> {
+pub fn display(thing: IdentifiedThing) -> WtgResult<()> {
     match thing {
         IdentifiedThing::Enriched(info) => display_enriched(*info),
         IdentifiedThing::File(file_result) => display_file(*file_result),

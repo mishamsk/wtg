@@ -12,16 +12,16 @@ pub mod remote;
 pub mod repo_manager;
 
 use cli::Cli;
-use error::{Result, WtgError};
+use error::{WtgError, WtgResult};
 use repo_manager::RepoManager;
 
 /// Run the CLI using the process arguments.
-pub fn run() -> Result<()> {
+pub fn run() -> WtgResult<()> {
     run_with_args(std::env::args())
 }
 
 /// Run the CLI using a custom iterator of arguments.
-pub fn run_with_args<I, T>(args: I) -> Result<()>
+pub fn run_with_args<I, T>(args: I) -> WtgResult<()>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
@@ -44,7 +44,7 @@ where
     run_with_cli(cli)
 }
 
-fn run_with_cli(cli: Cli) -> Result<()> {
+fn run_with_cli(cli: Cli) -> WtgResult<()> {
     // If no input provided, show custom help
     if cli.input.is_none() {
         help::display_help();
@@ -58,7 +58,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     runtime.block_on(run_async(cli))
 }
 
-async fn run_async(cli: Cli) -> Result<()> {
+async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
     let parsed_input = cli.parse_input().ok_or_else(|| WtgError::Cli {
         message: "Invalid input".to_string(),

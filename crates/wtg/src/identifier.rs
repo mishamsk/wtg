@@ -1,4 +1,4 @@
-use crate::error::{Result, WtgError};
+use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{GitHubClient, IssueInfo, PullRequestInfo, ReleaseInfo};
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ pub enum IdentifiedThing {
     TagOnly(Box<TagInfo>, Option<String>), // Just a tag, no commit yet
 }
 
-pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
+pub async fn identify(input: &str, git: GitRepo) -> WtgResult<IdentifiedThing> {
     let github = git
         .github_remote()
         .map(|(owner, repo)| Arc::new(GitHubClient::new(owner, repo)));

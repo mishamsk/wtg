@@ -1,4 +1,4 @@
-use crate::error::{Result, WtgError};
+use crate::error::{WtgError, WtgResult};
 use crate::github::ReleaseInfo;
 use git2::{Commit, Oid, Repository, Time};
 use regex::Regex;
@@ -64,7 +64,7 @@ pub struct SemverInfo {
 
 impl GitRepo {
     /// Open the git repository from the current directory
-    pub fn open() -> Result<Self> {
+    pub fn open() -> WtgResult<Self> {
         let repo = Repository::discover(".").map_err(|_| WtgError::NotInGitRepo)?;
         let path = repo.path().to_path_buf();
         Ok(Self {
@@ -74,7 +74,7 @@ impl GitRepo {
     }
 
     /// Open the git repository from a specific path
-    pub fn from_path(path: &Path) -> Result<Self> {
+    pub fn from_path(path: &Path) -> WtgResult<Self> {
         let repo = Repository::open(path).map_err(|_| WtgError::NotInGitRepo)?;
         let repo_path = repo.path().to_path_buf();
         Ok(Self {
