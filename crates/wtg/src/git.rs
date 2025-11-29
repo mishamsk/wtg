@@ -45,12 +45,31 @@ pub struct FileInfo {
 pub struct TagInfo {
     pub name: String,
     pub commit_hash: String,
-    pub is_semver: bool,
     pub semver_info: Option<SemverInfo>,
     pub is_release: bool,             // Whether this is a GitHub release
     pub release_name: Option<String>, // GitHub release name (if is_release)
     pub release_url: Option<String>,  // GitHub release URL (if is_release)
     pub published_at: Option<String>, // GitHub release published date (if is_release)
+}
+
+impl TagInfo {
+    /// Whether this is a semver tag
+    #[must_use]
+    pub const fn is_semver(&self) -> bool {
+        self.semver_info.is_some()
+    }
+
+    /// Whether this tag represents a stable release (no pre-release, no build metadata)
+    #[must_use]
+    pub const fn is_stable_semver(&self) -> bool {
+        if let Some(semver) = &self.semver_info {
+            semver.pre_release.is_none()
+                && semver.build_metadata.is_none()
+                && semver.build.is_none()
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,7 +235,6 @@ impl GitRepo {
                         && let Ok(commit) = obj.peel_to_commit()
                     {
                         let semver_info = parse_semver(tag_name);
-                        let is_semver = semver_info.is_some();
 
                         let (is_release, release_name, release_url, published_at) = release_map
                             .get(tag_name)
@@ -232,7 +250,6 @@ impl GitRepo {
                         tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: commit.id().to_string(),
-                            is_semver,
                             semver_info,
                             is_release,
                             release_name,
@@ -269,7 +286,6 @@ impl GitRepo {
             Some(TagInfo {
                 name: release.tag_name.clone(),
                 commit_hash: commit.id().to_string(),
-                is_semver: semver_info.is_some(),
                 semver_info,
                 is_release: true,
                 release_name: release.name.clone(),
@@ -326,7 +342,6 @@ impl GitRepo {
                         containing_tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: tag_oid.to_string(),
-                            is_semver: semver_info.is_some(),
                             semver_info,
                             is_release: false,
                             release_name: None,

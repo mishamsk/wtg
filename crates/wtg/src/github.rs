@@ -670,7 +670,6 @@ impl GitHubClient {
         Some(TagInfo {
             name: release.tag_name.clone(),
             commit_hash: compare.base_commit.sha,
-            is_semver: semver_info.is_some(),
             semver_info,
             is_release: true,
             release_name: release.name.clone(),

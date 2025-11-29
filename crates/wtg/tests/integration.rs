@@ -92,7 +92,7 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             has_pr: info.pr.is_some(),
             has_issue: info.issue.is_some(),
             release_name: info.release.as_ref().map(|r| r.name.clone()),
-            release_is_semver: info.release.as_ref().map(|r| r.is_semver),
+            release_is_semver: info.release.as_ref().map(wtg_cli::git::TagInfo::is_semver),
             tag_name: None,
             file_path: None,
             previous_authors_count: None,
@@ -110,7 +110,7 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             } else {
                 None
             },
-            release_is_semver: Some(tag_info.is_semver),
+            release_is_semver: Some(tag_info.is_semver()),
             tag_name: Some(tag_info.name.clone()),
             file_path: None,
             previous_authors_count: None,
@@ -124,7 +124,10 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             has_pr: false,
             has_issue: false,
             release_name: file_result.release.as_ref().map(|r| r.name.clone()),
-            release_is_semver: file_result.release.as_ref().map(|r| r.is_semver),
+            release_is_semver: file_result
+                .release
+                .as_ref()
+                .map(wtg_cli::git::TagInfo::is_semver),
             tag_name: None,
             file_path: Some(file_result.file_info.path.clone()),
             previous_authors_count: Some(file_result.file_info.previous_authors.len()),

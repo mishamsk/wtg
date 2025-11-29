@@ -267,13 +267,15 @@ async fn resolve_release_for_commit(
     pr_repo_info: Option<&GhRepoInfo>,
 ) -> Option<TagInfo> {
     let candidates = collect_tag_candidates(git, commit_hash);
-    let has_semver = candidates.iter().any(|candidate| candidate.info.is_semver);
+    let has_semver = candidates
+        .iter()
+        .any(|candidate| candidate.info.is_semver());
 
     let targeted_releases = if let Some(gh) = github {
         let target_names: Vec<_> = if has_semver {
             candidates
                 .iter()
-                .filter(|candidate| candidate.info.is_semver)
+                .filter(|candidate| candidate.info.is_semver())
                 .map(|candidate| candidate.info.name.clone())
                 .collect()
         } else {
@@ -435,10 +437,10 @@ fn pick_best_tag(candidates: &[TagCandidate]) -> Option<TagInfo> {
             .map(|candidate| candidate.info.clone())
     }
 
-    select_with_pred(candidates, |c| c.info.is_release && c.info.is_semver)
-        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && c.info.is_semver))
-        .or_else(|| select_with_pred(candidates, |c| c.info.is_release && !c.info.is_semver))
-        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && !c.info.is_semver))
+    select_with_pred(candidates, |c| c.info.is_release && c.info.is_semver())
+        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && c.info.is_semver()))
+        .or_else(|| select_with_pred(candidates, |c| c.info.is_release && !c.info.is_semver()))
+        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && !c.info.is_semver()))
 }
 
 /// Resolve a file path

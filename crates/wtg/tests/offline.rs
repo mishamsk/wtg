@@ -61,7 +61,7 @@ async fn test_identify_commit_by_short_hash(test_repo: TestRepoFixture) {
             assert!(info.release.is_some());
             let release = info.release.unwrap();
             assert_eq!(release.name, "v1.0.0");
-            assert!(release.is_semver);
+            assert!(release.is_semver());
         }
         _ => panic!("Expected Enriched result, got something else"),
     }
@@ -97,7 +97,7 @@ async fn test_identify_file(test_repo: TestRepoFixture) {
             assert!(file_result.release.is_some());
             let release = file_result.release.unwrap();
             assert_eq!(release.name, "beta-release");
-            assert!(!release.is_semver);
+            assert!(!release.is_semver());
         }
         _ => panic!("Expected File result, got something else"),
     }
@@ -117,7 +117,7 @@ async fn test_identify_tag(test_repo: TestRepoFixture) {
         IdentifiedThing::TagOnly(tag_info, _github_url) => {
             assert_eq!(tag_info.name, "v1.0.0");
             assert_eq!(tag_info.commit_hash, test_repo.commits.commit1_add_file);
-            assert!(tag_info.is_semver);
+            assert!(tag_info.is_semver());
 
             let semver = tag_info.semver_info.expect("Should have semver info");
             assert_eq!(semver.major, 1);
