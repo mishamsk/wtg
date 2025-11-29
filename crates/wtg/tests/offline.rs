@@ -29,7 +29,15 @@ async fn test_identify_commit_by_hash(test_repo: TestRepoFixture) {
             assert_eq!(commit.hash, test_repo.commits.commit0_initial);
             assert_eq!(commit.message, "Initial commit");
             assert_eq!(commit.author_name, "Test User");
-            assert_eq!(commit.author_email, "test@example.com");
+            assert_eq!(commit.author_email.as_deref(), Some("test@example.com"));
+            assert!(
+                commit.author_login.is_none(),
+                "Expected no GitHub login for test user"
+            );
+            assert!(
+                commit.author_url.is_none(),
+                "Expected no GitHub author url for test user"
+            );
         }
         _ => panic!("Expected Enriched result, got something else"),
     }

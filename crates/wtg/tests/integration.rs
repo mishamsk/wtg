@@ -63,11 +63,11 @@ async fn integration_identify_ghostty_issue_4800() {
 
     // Create a GitHub client for the ghostty repository
     let repo_info = GhRepoInfo::new("ghostty-org".to_string(), "ghostty".to_string());
-    let client = GitHubClient::new(repo_info);
+    let client = GitHubClient::new();
 
     // Fetch the issue
     let issue = client
-        .fetch_issue(4800)
+        .fetch_issue(&repo_info, 4800)
         .await
         .expect("Failed to fetch ghostty issue #4800");
 
@@ -88,7 +88,11 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             entry_point: Some(format!("{:?}", info.entry_point)),
             commit_message: info.commit.as_ref().map(|c| c.message.clone()),
             commit_author: info.commit.as_ref().map(|c| c.author_name.clone()),
-            has_commit_url: info.commit_url.is_some(),
+            has_commit_url: info
+                .commit
+                .as_ref()
+                .and_then(|ci| ci.commit_url.as_deref())
+                .is_some(),
             has_pr: info.pr.is_some(),
             has_issue: info.issue.is_some(),
             release_name: info.release.as_ref().map(|r| r.name.clone()),

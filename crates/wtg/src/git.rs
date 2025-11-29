@@ -18,8 +18,11 @@ pub struct CommitInfo {
     pub short_hash: String,
     pub message: String,
     pub message_lines: usize,
+    pub commit_url: Option<String>,
     pub author_name: String,
-    pub author_email: String,
+    pub author_email: Option<String>,
+    pub author_login: Option<String>,
+    pub author_url: Option<String>,
     pub date: String,
     pub timestamp: i64, // Unix timestamp for the commit
 }
@@ -416,8 +419,11 @@ impl GitRepo {
             short_hash: commit.id().to_string()[..7].to_string(),
             message: (*lines.first().unwrap_or(&"")).to_string(),
             message_lines,
+            commit_url: None,
             author_name: commit.author().name().unwrap_or("Unknown").to_string(),
-            author_email: commit.author().email().unwrap_or("").to_string(),
+            author_email: commit.author().email().map(str::to_string),
+            author_login: None,
+            author_url: None,
             date: format_git_time(&time),
             timestamp: time.seconds(),
         }

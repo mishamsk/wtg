@@ -58,20 +58,15 @@ fn display_enriched(info: EnrichedInfo) {
                 println!();
             }
 
-            if let Some(commit) = &info.commit {
-                display_commit_section(
-                    commit,
-                    info.commit_url.as_ref(),
-                    info.commit_author_github_url.as_ref(),
-                    info.pr.as_ref(),
-                );
+            if let Some(commit_info) = info.commit.as_ref() {
+                display_commit_section(commit_info, info.pr.as_ref());
                 println!();
             }
 
             display_missing_info(&info);
 
-            if info.commit.is_some() {
-                display_release_info(info.release, info.commit_url.as_deref());
+            if let Some(commit_info) = info.commit.as_ref() {
+                display_release_info(info.release, commit_info.commit_url.as_deref());
             }
         }
         EntryPoint::PullRequestNumber(_) => {
@@ -84,20 +79,15 @@ fn display_enriched(info: EnrichedInfo) {
                 println!();
             }
 
-            if let Some(commit) = &info.commit {
-                display_commit_section(
-                    commit,
-                    info.commit_url.as_ref(),
-                    info.commit_author_github_url.as_ref(),
-                    info.pr.as_ref(),
-                );
+            if let Some(commit_info) = info.commit.as_ref() {
+                display_commit_section(commit_info, info.pr.as_ref());
                 println!();
             }
 
             display_missing_info(&info);
 
-            if info.commit.is_some() {
-                display_release_info(info.release, info.commit_url.as_deref());
+            if let Some(commit_info) = info.commit.as_ref() {
+                display_release_info(info.release, commit_info.commit_url.as_deref());
             }
         }
         _ => {
@@ -105,13 +95,8 @@ fn display_enriched(info: EnrichedInfo) {
             display_identification(&info.entry_point);
             println!();
 
-            if let Some(commit) = &info.commit {
-                display_commit_section(
-                    commit,
-                    info.commit_url.as_ref(),
-                    info.commit_author_github_url.as_ref(),
-                    info.pr.as_ref(),
-                );
+            if let Some(commit_info) = info.commit.as_ref() {
+                display_commit_section(commit_info, info.pr.as_ref());
                 println!();
             }
 
@@ -127,8 +112,8 @@ fn display_enriched(info: EnrichedInfo) {
 
             display_missing_info(&info);
 
-            if info.commit.is_some() {
-                display_release_info(info.release, info.commit_url.as_deref());
+            if let Some(commit_info) = info.commit.as_ref() {
+                display_release_info(info.release, commit_info.commit_url.as_deref());
             }
         }
     }
@@ -177,32 +162,40 @@ fn display_identification(entry_point: &EntryPoint) {
 
 /// Display commit information (the core section, always present when resolved)
 fn display_commit_section(
-    commit: &crate::git::CommitInfo,
-    commit_url: Option<&String>,
-    author_url: Option<&String>,
+    commit_info: &crate::git::CommitInfo,
     pr: Option<&crate::github::PullRequestInfo>,
 ) {
+    let commit_url = commit_info.commit_url.as_deref();
+    let author_url = commit_info.author_url.as_deref();
+
     println!("{}", "💻 The Commit:".cyan().bold());
     println!(
         "   {} {}",
         "Hash:".yellow(),
-        commit.short_hash.as_str().cyan()
+        commit_info.short_hash.as_str().cyan()
     );
 
     // Show commit author
     print_author_subsection(
         "Who wrote this gem:",
-        &commit.author_name,
-        &commit.author_email,
-        author_url.map(String::as_str),
+        &commit_info.author_name,
+        commit_info
+            .author_login
+            .as_deref()
+            .or(commit_info.author_email.as_deref()),
+        author_url,
     );
 
     // Show commit message if not a PR
     if pr.is_none() {
-        print_message_with_essay_joke(&commit.message, None, commit.message_lines);
+        print_message_with_essay_joke(&commit_info.message, None, commit_info.message_lines);
     }
 
-    println!("   {} {}", "📅".yellow(), commit.date.as_str().dark_grey());
+    println!(
+        "   {} {}",
+        "📅".yellow(),
+        commit_info.date.as_str().dark_grey()
+    );
 
     if let Some(url) = commit_url {
         print_link(url);
@@ -225,7 +218,7 @@ fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
         } else {
             "Who merged this beauty:"
         };
-        print_author_subsection(header, author, "", pr.author_url.as_deref());
+        print_author_subsection(header, author, None, pr.author_url.as_deref());
     }
 
     // PR description (overrides commit message)
@@ -255,7 +248,7 @@ fn display_issue_section(issue: &crate::identifier::IssueInfo) {
         print_author_subsection(
             "Who spotted the trouble:",
             author,
-            "",
+            None,
             issue.author_url.as_deref(),
         );
     }
@@ -325,15 +318,15 @@ fn print_link(url: &str) {
 fn print_author_subsection(
     header: &str,
     name: &str,
-    email_or_username: &str,
+    email_or_username: Option<&str>,
     profile_url: Option<&str>,
 ) {
     println!("   {} {}", "👤".yellow(), header.dark_grey());
 
-    if email_or_username.is_empty() {
-        println!("      {}", name.cyan());
-    } else {
+    if let Some(email_or_username) = email_or_username {
         println!("      {} ({})", name.cyan(), email_or_username.dark_grey());
+    } else {
+        println!("      {}", name.cyan());
     }
 
     if let Some(url) = profile_url {
@@ -374,14 +367,9 @@ fn display_file(file_result: FileResult) {
     println!("{} {}", "📄 Found file:".green().bold(), info.path.cyan());
     println!();
 
-    // Get the author URL for the last commit (first in the list)
-    let last_commit_author_url = file_result.author_urls.first().and_then(|opt| opt.as_ref());
-
     // Display the commit section (consistent with PR/issue flow)
     display_commit_section(
         &info.last_commit,
-        file_result.commit_url.as_ref(),
-        last_commit_author_url,
         None, // Files don't have associated PRs
     );
 

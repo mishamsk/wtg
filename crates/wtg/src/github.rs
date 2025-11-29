@@ -19,16 +19,20 @@ impl From<RepoCommit> for CommitInfo {
     fn from(commit: RepoCommit) -> Self {
         let message = commit.commit.message;
         let message_lines = message.lines().count();
+
         let author_name = commit
             .commit
             .author
             .as_ref()
             .map_or_else(|| "Unknown".to_string(), |a| a.name.clone());
-        let author_email = commit
-            .commit
+
+        let author_email = commit.commit.author.as_ref().and_then(|a| a.email.clone());
+
+        let commit_url = commit.html_url;
+
+        let (author_login, author_url) = commit
             .author
-            .as_ref()
-            .and_then(|a| a.email.clone())
+            .map(|author| (Some(author.login), Some(author.html_url.into())))
             .unwrap_or_default();
 
         let (date, timestamp) = commit
@@ -52,8 +56,11 @@ impl From<RepoCommit> for CommitInfo {
             short_hash: full_hash[..7.min(full_hash.len())].to_string(),
             message: message.lines().next().unwrap_or("").to_string(),
             message_lines,
+            commit_url: Some(commit_url),
             author_name,
             author_email,
+            author_login,
+            author_url,
             date,
             timestamp,
         }
@@ -98,11 +105,16 @@ impl GhRepoInfo {
     }
 }
 
+/// GitHub API client wrapper.
+///
+/// - Provides a simplified interface for common GitHub operations used in wtg over direct octocrab usage.
+/// - Handles authentication via `GITHUB_TOKEN` env var or gh CLI config.
+/// - Supports fallback to anonymous requests when auth fails.
+/// - Converts known octocrab errors into `WtgError` variants.
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
     auth_client: Option<Octocrab>,
     anonymous_client: Option<Octocrab>,
-    repo_info: GhRepoInfo,
 }
 
 /// Information about a Pull Request
@@ -141,14 +153,6 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequestInfo {
             created_at,
         }
     }
-}
-
-/// Reference to a PR that may be in a different repository
-#[derive(Debug, Clone)]
-pub struct PullRequestRef {
-    pub number: u64,
-    pub owner: String,
-    pub repo: String,
 }
 
 /// Information about an Issue
@@ -201,29 +205,22 @@ pub struct ReleaseInfo {
     pub prerelease: bool,
 }
 
+impl Default for GitHubClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitHubClient {
-    /// Get the repository owner
-    #[must_use]
-    pub fn owner(&self) -> &str {
-        self.repo_info.owner()
-    }
-
-    /// Get the repository name
-    #[must_use]
-    pub fn repo(&self) -> &str {
-        self.repo_info.repo()
-    }
-
     /// Create a new GitHub client with authentication
     #[must_use]
-    pub fn new(repo_info: GhRepoInfo) -> Self {
+    pub fn new() -> Self {
         let auth_client = Self::build_auth_client();
         let anonymous_client = Self::build_anonymous_client();
 
         Self {
             auth_client,
             anonymous_client,
-            repo_info,
         }
     }
 
@@ -301,39 +298,15 @@ impl GitHubClient {
         None
     }
 
-    /// Fetch the GitHub username and URLs for a commit
-    /// Returns None if the commit doesn't exist on GitHub
-    pub async fn fetch_commit_info(
-        &self,
-        commit_hash: &str,
-    ) -> Option<(String, String, Option<(String, String)>)> {
-        let commit_hash = commit_hash.to_string();
-        let commit = self
-            .call_client_api_with_fallback(|client, gh| {
-                let hash = commit_hash.clone();
-                Box::pin(async move { client.commits(gh.owner(), gh.repo()).get(&hash).await })
-            })
-            .await
-            .ok()?;
-
-        let commit_url = commit.html_url;
-        let author_info = commit
-            .author
-            .map(|author| (author.login, author.html_url.into()));
-
-        Some((commit_hash, commit_url, author_info))
-    }
-
     /// Fetch full commit information from a specific repository
-    /// This is used for cross-project PRs where the commit is in a different repo
-    /// Returns all the information needed to construct a `CommitInfo`
+    /// Returns None if the commit doesn't exist on GitHub or client errors
     pub async fn fetch_commit_full_info(
         &self,
         repo_info: &GhRepoInfo,
         commit_hash: &str,
     ) -> Option<CommitInfo> {
         let commit = self
-            .call_client_api_with_fallback(move |client, _gh| {
+            .call_client_api_with_fallback(move |client| {
                 let hash = commit_hash.to_string();
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -350,25 +323,14 @@ impl GitHubClient {
     }
 
     /// Try to fetch a PR
-    pub async fn fetch_pr(&self, number: u64) -> Option<PullRequestInfo> {
+    pub async fn fetch_pr(&self, repo_info: &GhRepoInfo, number: u64) -> Option<PullRequestInfo> {
         let pr = self
-            .call_client_api_with_fallback(|client, gh| {
-                Box::pin(async move { client.pulls(gh.owner(), gh.repo()).get(number).await })
-            })
-            .await
-            .ok()?;
-
-        Some(pr.into())
-    }
-
-    pub async fn fetch_pr_ref(&self, pr_ref: PullRequestRef) -> Option<PullRequestInfo> {
-        let pr = self
-            .call_client_api_with_fallback(move |client, _| {
-                let pr_ref = pr_ref.clone();
+            .call_client_api_with_fallback(move |client| {
+                let repo_info = repo_info.clone();
                 Box::pin(async move {
                     client
-                        .pulls(&pr_ref.owner, &pr_ref.repo)
-                        .get(pr_ref.number)
+                        .pulls(repo_info.owner(), repo_info.repo())
+                        .get(number)
                         .await
                 })
             })
@@ -379,10 +341,20 @@ impl GitHubClient {
     }
 
     /// Try to fetch an issue
-    pub async fn fetch_issue(&self, number: u64) -> Option<ExtendedIssueInfo> {
+    pub async fn fetch_issue(
+        &self,
+        repo_info: &GhRepoInfo,
+        number: u64,
+    ) -> Option<ExtendedIssueInfo> {
         let issue = self
-            .call_client_api_with_fallback(|client, gh| {
-                Box::pin(async move { client.issues(gh.owner(), gh.repo()).get(number).await })
+            .call_client_api_with_fallback(move |client| {
+                let repo_info = repo_info.clone();
+                Box::pin(async move {
+                    client
+                        .issues(repo_info.owner(), repo_info.repo())
+                        .get(number)
+                        .await
+                })
             })
             .await
             .ok()?;
@@ -391,7 +363,7 @@ impl GitHubClient {
 
         // Only fetch timeline for closed issues (open issues can't have closing PRs)
         if matches!(issue_info.state, octocrab::models::IssueState::Closed) {
-            issue_info.closing_prs = self.find_closing_prs(issue_info.number).await;
+            issue_info.closing_prs = self.find_closing_prs(repo_info, issue_info.number).await;
         }
 
         Some(issue_info)
@@ -402,15 +374,20 @@ impl GitHubClient {
     /// Priority:
     /// 1. Closed events with `commit_id` (clearly indicate the PR/commit that closed the issue)
     /// 2. CrossReferenced/Referenced events (fallback, but only merged PRs)
-    async fn find_closing_prs(&self, issue_number: u64) -> Vec<PullRequestInfo> {
+    async fn find_closing_prs(
+        &self,
+        repo_info: &GhRepoInfo,
+        issue_number: u64,
+    ) -> Vec<PullRequestInfo> {
         let mut closing_prs = Vec::new();
 
         // Try to get first page with auth client, fallback to anonymous
         let Ok((mut current_page, client)) = self
-            .call_api_and_get_client(|client, gh| {
+            .call_api_and_get_client(move |client| {
+                let repo_info = repo_info.clone();
                 Box::pin(async move {
                     client
-                        .issues(gh.owner(), gh.repo())
+                        .issues(repo_info.owner(), repo_info.repo())
                         .list_timeline_events(issue_number)
                         .per_page(100)
                         .send()
@@ -433,13 +410,9 @@ impl GitHubClient {
                         if let Some(repo_info) =
                             parse_github_repo_url(issue.repository_url.as_str())
                         {
-                            let pr_ref = PullRequestRef {
-                                number: issue.number,
-                                owner: repo_info.owner().to_string(),
-                                repo: repo_info.repo().to_string(),
-                            };
-
-                            let Some(pr_info) = Box::pin(self.fetch_pr_ref(pr_ref)).await else {
+                            let Some(pr_info) =
+                                Box::pin(self.fetch_pr(&repo_info, issue.number)).await
+                            else {
                                 continue; // Skip if PR fetch failed
                             };
 
@@ -493,23 +466,11 @@ impl GitHubClient {
         closing_prs
     }
 
-    /// Fetch all releases from GitHub
-    pub async fn fetch_releases(&self) -> Vec<ReleaseInfo> {
-        self.fetch_releases_since(None).await
-    }
-
     /// Fetch releases from GitHub, optionally filtered by date
     /// If `since_date` is provided, stop fetching releases older than this date
     /// This significantly speeds up lookups for recent PRs/issues
     #[allow(clippy::too_many_lines)]
-    pub async fn fetch_releases_since(&self, since_date: Option<&str>) -> Vec<ReleaseInfo> {
-        self.fetch_releases_since_for_repo(&self.repo_info, since_date)
-            .await
-    }
-
-    /// Fetch releases from a specific repository, optionally filtered by date
-    #[allow(clippy::too_many_lines)]
-    pub async fn fetch_releases_since_for_repo(
+    pub async fn fetch_releases_since(
         &self,
         repo_info: &GhRepoInfo,
         since_date: Option<&str>,
@@ -527,7 +488,7 @@ impl GitHubClient {
 
         // Try to get first page with auth client, fallback to anonymous
         let Ok((mut current_page, client)) = self
-            .call_api_and_get_client(move |client, _| {
+            .call_api_and_get_client(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
                     client
@@ -601,14 +562,18 @@ impl GitHubClient {
     }
 
     /// Fetch a GitHub release by tag.
-    pub async fn fetch_release_by_tag(&self, tag: &str) -> Option<ReleaseInfo> {
-        let tag = tag.to_string();
+    pub async fn fetch_release_by_tag(
+        &self,
+        repo_info: &GhRepoInfo,
+        tag: &str,
+    ) -> Option<ReleaseInfo> {
         let release = self
-            .call_client_api_with_fallback(|client, gh| {
-                let tag = tag.clone();
+            .call_client_api_with_fallback(move |client| {
+                let tag = tag.to_string();
+                let repo_info = repo_info.clone();
                 Box::pin(async move {
                     client
-                        .repos(gh.owner(), gh.repo())
+                        .repos(repo_info.owner(), repo_info.repo())
                         .releases()
                         .get_by_tag(tag.as_str())
                         .await
@@ -635,14 +600,11 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         target_commit: &str,
     ) -> Option<TagInfo> {
-        let tag_name = release.tag_name.clone();
-        let target_commit = target_commit.to_string();
-
         // Use compare API with per_page=1 to optimize
         let compare = self
-            .call_client_api_with_fallback(move |client, _| {
-                let tag_name = tag_name.clone();
-                let target_commit = target_commit.clone();
+            .call_client_api_with_fallback(move |client| {
+                let tag_name = release.tag_name.clone();
+                let target_commit = target_commit.to_string();
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
                     client
@@ -681,24 +643,26 @@ impl GitHubClient {
     /// Build GitHub URLs for various things
     /// Build a commit URL (fallback when API data unavailable)
     /// Uses URL encoding to prevent injection
-    pub fn commit_url(&self, hash: &str) -> String {
+    #[must_use]
+    pub fn commit_url(repo_info: &GhRepoInfo, hash: &str) -> String {
         use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/commit/{}",
-            utf8_percent_encode(self.owner(), NON_ALPHANUMERIC),
-            utf8_percent_encode(self.repo(), NON_ALPHANUMERIC),
+            utf8_percent_encode(repo_info.owner(), NON_ALPHANUMERIC),
+            utf8_percent_encode(repo_info.repo(), NON_ALPHANUMERIC),
             utf8_percent_encode(hash, NON_ALPHANUMERIC)
         )
     }
 
     /// Build a tag URL (fallback when API data unavailable)
     /// Uses URL encoding to prevent injection
-    pub fn tag_url(&self, tag: &str) -> String {
+    #[must_use]
+    pub fn tag_url(repo_info: &GhRepoInfo, tag: &str) -> String {
         use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/tree/{}",
-            utf8_percent_encode(self.owner(), NON_ALPHANUMERIC),
-            utf8_percent_encode(self.repo(), NON_ALPHANUMERIC),
+            utf8_percent_encode(repo_info.owner(), NON_ALPHANUMERIC),
+            utf8_percent_encode(repo_info.repo(), NON_ALPHANUMERIC),
             utf8_percent_encode(tag, NON_ALPHANUMERIC)
         )
     }
@@ -729,8 +693,7 @@ impl GitHubClient {
     /// Call a GitHub API with fallback from authenticated to anonymous client.
     async fn call_client_api_with_fallback<F, T>(&self, api_call: F) -> WtgResult<T>
     where
-        for<'a> F:
-            Fn(&'a Octocrab, &'a Self) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
+        for<'a> F: Fn(&'a Octocrab) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
     {
         let (result, _client) = self.call_api_and_get_client(api_call).await?;
         Ok(result)
@@ -740,12 +703,11 @@ impl GitHubClient {
     /// Returns results & the client used, or error.
     async fn call_api_and_get_client<F, T>(&self, api_call: F) -> WtgResult<(T, &Octocrab)>
     where
-        for<'a> F:
-            Fn(&'a Octocrab, &'a Self) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
+        for<'a> F: Fn(&'a Octocrab) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
     {
         // Try with authenticated client first
         if let Some(client) = self.auth_client.as_ref() {
-            match Self::await_with_timeout_and_error(api_call(client, self)).await {
+            match Self::await_with_timeout_and_error(api_call(client)).await {
                 Ok(result) => return Ok((result, client)),
                 Err(e) if e.is_gh_saml() => {
                     // Fall through to try anonymous client
@@ -762,7 +724,7 @@ impl GitHubClient {
             return Err(WtgError::GhNoClient);
         };
 
-        let result = Self::await_with_timeout_and_error(api_call(client, self)).await?;
+        let result = Self::await_with_timeout_and_error(api_call(client)).await?;
 
         Ok((result, client))
     }
