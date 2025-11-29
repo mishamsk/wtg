@@ -6,7 +6,10 @@ use octocrab::{
 use serde::Deserialize;
 use std::{future::Future, pin::Pin, time::Duration};
 
-use crate::error::{WtgError, WtgResult};
+use crate::{
+    error::{WtgError, WtgResult},
+    parse_url::parse_github_repo_url,
+};
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 const READ_TIMEOUT_SECS: u64 = 30;
@@ -24,11 +27,33 @@ struct GhHostConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct GhRepoInfo {
+    owner: String,
+    repo: String,
+}
+
+impl GhRepoInfo {
+    #[must_use]
+    pub const fn new(owner: String, repo: String) -> Self {
+        Self { owner, repo }
+    }
+
+    #[must_use]
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    #[must_use]
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GitHubClient {
     auth_client: Option<Octocrab>,
     anonymous_client: Option<Octocrab>,
-    owner: String,
-    repo: String,
+    repo_info: GhRepoInfo,
 }
 
 /// Information about a Pull Request
@@ -126,26 +151,25 @@ impl GitHubClient {
     /// Get the repository owner
     #[must_use]
     pub fn owner(&self) -> &str {
-        &self.owner
+        self.repo_info.owner()
     }
 
     /// Get the repository name
     #[must_use]
     pub fn repo(&self) -> &str {
-        &self.repo
+        self.repo_info.repo()
     }
 
     /// Create a new GitHub client with authentication
     #[must_use]
-    pub fn new(owner: String, repo: String) -> Self {
+    pub fn new(repo_info: GhRepoInfo) -> Self {
         let auth_client = Self::build_auth_client();
         let anonymous_client = Self::build_anonymous_client();
 
         Self {
             auth_client,
             anonymous_client,
-            owner,
-            repo,
+            repo_info,
         }
     }
 
@@ -233,7 +257,7 @@ impl GitHubClient {
         let commit = self
             .call_client_api_with_fallback(|client, gh| {
                 let hash = commit_hash.clone();
-                Box::pin(async move { client.commits(&gh.owner, &gh.repo).get(&hash).await })
+                Box::pin(async move { client.commits(gh.owner(), gh.repo()).get(&hash).await })
             })
             .await
             .ok()?;
@@ -250,7 +274,24 @@ impl GitHubClient {
     pub async fn fetch_pr(&self, number: u64) -> Option<PullRequestInfo> {
         let pr = self
             .call_client_api_with_fallback(|client, gh| {
-                Box::pin(async move { client.pulls(&gh.owner, &gh.repo).get(number).await })
+                Box::pin(async move { client.pulls(gh.owner(), gh.repo()).get(number).await })
+            })
+            .await
+            .ok()?;
+
+        Some(pr.into())
+    }
+
+    pub async fn fetch_pr_ref(&self, pr_ref: PullRequestRef) -> Option<PullRequestInfo> {
+        let pr = self
+            .call_client_api_with_fallback(move |client, _| {
+                let pr_ref = pr_ref.clone();
+                Box::pin(async move {
+                    client
+                        .pulls(&pr_ref.owner, &pr_ref.repo)
+                        .get(pr_ref.number)
+                        .await
+                })
             })
             .await
             .ok()?;
@@ -262,7 +303,7 @@ impl GitHubClient {
     pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
         let issue = self
             .call_client_api_with_fallback(|client, gh| {
-                Box::pin(async move { client.issues(&gh.owner, &gh.repo).get(number).await })
+                Box::pin(async move { client.issues(gh.owner(), gh.repo()).get(number).await })
             })
             .await
             .ok()?;
@@ -287,7 +328,7 @@ impl GitHubClient {
             .call_api_and_get_client(|client, gh| {
                 Box::pin(async move {
                     client
-                        .issues(&gh.owner, &gh.repo)
+                        .issues(gh.owner(), gh.repo())
                         .list_timeline_events(issue_number)
                         .per_page(100)
                         .send()
@@ -310,13 +351,13 @@ impl GitHubClient {
                     let issue = &source.issue;
                     if issue.pull_request.is_some() {
                         // Extract repository info from repository_url using existing parser
-                        if let Some((owner, repo)) =
-                            crate::git::parse_github_url(issue.repository_url.as_str())
+                        if let Some(repo_info) =
+                            parse_github_repo_url(issue.repository_url.as_str())
                         {
                             let pr_ref = PullRequestRef {
                                 number: issue.number,
-                                owner,
-                                repo,
+                                owner: repo_info.owner().to_string(),
+                                repo: repo_info.repo().to_string(),
                             };
                             // Check if we already have this PR
                             if !closing_prs.iter().any(|p| {
@@ -372,7 +413,7 @@ impl GitHubClient {
             .call_api_and_get_client(|client, gh| {
                 Box::pin(async move {
                     client
-                        .repos(&gh.owner, &gh.repo)
+                        .repos(gh.owner(), gh.repo())
                         .releases()
                         .list()
                         .per_page(per_page)
@@ -422,7 +463,7 @@ impl GitHubClient {
             // Fetch next page
             current_page = match Self::await_with_timeout_and_error(
                 client
-                    .repos(&self.owner, &self.repo)
+                    .repos(self.owner(), self.repo())
                     .releases()
                     .list()
                     .per_page(per_page)
@@ -448,7 +489,7 @@ impl GitHubClient {
                 let tag = tag.clone();
                 Box::pin(async move {
                     client
-                        .repos(&gh.owner, &gh.repo)
+                        .repos(gh.owner(), gh.repo())
                         .releases()
                         .get_by_tag(tag.as_str())
                         .await
@@ -472,8 +513,8 @@ impl GitHubClient {
         use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/commit/{}",
-            utf8_percent_encode(&self.owner, NON_ALPHANUMERIC),
-            utf8_percent_encode(&self.repo, NON_ALPHANUMERIC),
+            utf8_percent_encode(self.owner(), NON_ALPHANUMERIC),
+            utf8_percent_encode(self.repo(), NON_ALPHANUMERIC),
             utf8_percent_encode(hash, NON_ALPHANUMERIC)
         )
     }
@@ -484,8 +525,8 @@ impl GitHubClient {
         use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/tree/{}",
-            utf8_percent_encode(&self.owner, NON_ALPHANUMERIC),
-            utf8_percent_encode(&self.repo, NON_ALPHANUMERIC),
+            utf8_percent_encode(self.owner(), NON_ALPHANUMERIC),
+            utf8_percent_encode(self.repo(), NON_ALPHANUMERIC),
             utf8_percent_encode(tag, NON_ALPHANUMERIC)
         )
     }

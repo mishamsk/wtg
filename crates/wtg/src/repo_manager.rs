@@ -1,5 +1,6 @@
 use crate::error::{WtgError, WtgResult};
 use crate::git::GitRepo;
+use crate::github::GhRepoInfo;
 use git2::{FetchOptions, RemoteCallbacks, Repository};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,9 +8,7 @@ use std::process::Command;
 /// Manages repository access for both local and remote repositories
 pub struct RepoManager {
     local_path: PathBuf,
-    is_remote: bool,
-    owner: Option<String>,
-    repo_name: Option<String>,
+    repo_info: Option<GhRepoInfo>,
 }
 
 impl RepoManager {
@@ -20,17 +19,15 @@ impl RepoManager {
 
         Ok(Self {
             local_path: path,
-            is_remote: false,
-            owner: None,
-            repo_name: None,
+            repo_info: None,
         })
     }
 
     /// Create a repo manager for a remote GitHub repository
     /// This will clone the repo to a cache directory if needed
-    pub fn remote(owner: String, repo: String) -> WtgResult<Self> {
+    pub fn remote(repo_info: GhRepoInfo) -> WtgResult<Self> {
         let cache_dir = get_cache_dir()?;
-        let repo_cache_path = cache_dir.join(format!("{owner}/{repo}"));
+        let repo_cache_path = cache_dir.join(format!("{}/{}", repo_info.owner(), repo_info.repo()));
 
         // Check if already cloned
         if repo_cache_path.exists() && Repository::open(&repo_cache_path).is_ok() {
@@ -41,14 +38,12 @@ impl RepoManager {
             }
         } else {
             // Clone it
-            clone_remote_repo(&owner, &repo, &repo_cache_path)?;
+            clone_remote_repo(repo_info.owner(), repo_info.repo(), &repo_cache_path)?;
         }
 
         Ok(Self {
             local_path: repo_cache_path,
-            is_remote: true,
-            owner: Some(owner),
-            repo_name: Some(repo),
+            repo_info: Some(repo_info),
         })
     }
 
@@ -66,17 +61,13 @@ impl RepoManager {
     /// Check if this is a remote repository
     #[must_use]
     pub const fn is_remote(&self) -> bool {
-        self.is_remote
+        self.repo_info.is_some()
     }
 
     /// Get the owner/repo info (only for remote repos)
     #[must_use]
-    pub fn remote_info(&self) -> Option<(String, String)> {
-        if self.is_remote {
-            Some((self.owner.clone()?, self.repo_name.clone()?))
-        } else {
-            None
-        }
+    pub const fn remote_info(&self) -> Option<&GhRepoInfo> {
+        self.repo_info.as_ref()
     }
 }
 

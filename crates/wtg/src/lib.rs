@@ -8,6 +8,7 @@ pub mod github;
 pub mod help;
 pub mod identifier;
 pub mod output;
+pub mod parse_url;
 pub mod remote;
 pub mod repo_manager;
 
@@ -66,12 +67,8 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     })?;
 
     // Create the appropriate repo manager
-    let repo_manager = if let Some(owner) = &parsed_input.owner {
-        let repo = parsed_input.repo.as_ref().ok_or_else(|| WtgError::Cli {
-            message: "Invalid repository".to_string(),
-            code: 1,
-        })?;
-        RepoManager::remote(owner.clone(), repo.clone())?
+    let repo_manager = if let Some(gh_repo_info) = parsed_input.gh_repo_info() {
+        RepoManager::remote(gh_repo_info.clone())?
     } else {
         RepoManager::local()?
     };
@@ -82,15 +79,16 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     // Determine the remote info - either from the remote repo manager or from the local repo
     let remote_info = repo_manager
         .remote_info()
+        .cloned()
         .map_or_else(|| git_repo.github_remote(), Some);
 
     // Print snarky messages if no GitHub remote (only for local repos)
-    if !repo_manager.is_remote() {
-        remote::check_remote_and_snark(remote_info.clone(), git_repo.path());
+    if remote_info.is_none() {
+        remote::check_remote_and_snark(git_repo.path());
     }
 
     // Detect what type of input we have
-    let result = Box::pin(identifier::identify(&parsed_input.query, git_repo)).await?;
+    let result = Box::pin(identifier::identify(parsed_input.query(), git_repo)).await?;
 
     // Display the result
     output::display(result)?;

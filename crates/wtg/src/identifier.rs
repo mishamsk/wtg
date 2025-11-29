@@ -53,7 +53,7 @@ pub enum IdentifiedThing {
 pub async fn identify(input: &str, git: GitRepo) -> WtgResult<IdentifiedThing> {
     let github = git
         .github_remote()
-        .map(|(owner, repo)| Arc::new(GitHubClient::new(owner, repo)));
+        .map(|repo_info| Arc::new(GitHubClient::new(repo_info)));
 
     // Try as commit hash first
     if let Some(commit_info) = git.find_commit(input) {
@@ -160,22 +160,8 @@ async fn resolve_number(
     }
 
     if let Some(issue_info) = Box::pin(gh.fetch_issue(number)).await {
-        if let Some(first_pr_ref) = issue_info.closing_prs.first() {
-            // Create a GitHub client for the PR's repository (might be cross-repo)
-            let pr_gh_owned;
-            let pr_gh = if first_pr_ref.owner == gh.owner() && first_pr_ref.repo == gh.repo() {
-                // Same repo, reuse existing client
-                gh
-            } else {
-                // Different repo, create new client
-                pr_gh_owned = Arc::new(GitHubClient::new(
-                    first_pr_ref.owner.clone(),
-                    first_pr_ref.repo.clone(),
-                ));
-                pr_gh_owned.as_ref()
-            };
-
-            if let Some(pr_info) = Box::pin(pr_gh.fetch_pr(first_pr_ref.number)).await {
+        for pr_ref in &issue_info.closing_prs {
+            if let Some(pr_info) = Box::pin(gh.fetch_pr_ref(pr_ref.clone())).await {
                 if let Some(merge_sha) = &pr_info.merge_commit_sha
                     && let Some(commit_info) = git.find_commit(merge_sha)
                 {

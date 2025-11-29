@@ -1,5 +1,6 @@
 use crate::error::{WtgError, WtgResult};
-use crate::github::ReleaseInfo;
+use crate::github::{GhRepoInfo, ReleaseInfo};
+use crate::parse_url::parse_github_repo_url;
 use git2::{Commit, Oid, Repository, Time};
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -364,14 +365,13 @@ impl GitRepo {
 
     /// Get the GitHub remote URL if it exists (checks all remotes)
     #[must_use]
-    pub fn github_remote(&self) -> Option<(String, String)> {
+    pub fn github_remote(&self) -> Option<GhRepoInfo> {
         self.with_repo(|repo| {
             for remote_name in ["origin", "upstream"] {
                 if let Ok(remote) = repo.find_remote(remote_name)
                     && let Some(url) = remote.url()
-                    && let Some(github_info) = parse_github_url(url)
                 {
-                    return Some(github_info);
+                    return parse_github_repo_url(url);
                 }
             }
 
@@ -379,9 +379,8 @@ impl GitRepo {
                 for remote_name in remotes.iter().flatten() {
                     if let Ok(remote) = repo.find_remote(remote_name)
                         && let Some(url) = remote.url()
-                        && let Some(github_info) = parse_github_url(url)
                     {
-                        return Some(github_info);
+                        return parse_github_repo_url(url);
                     }
                 }
             }
@@ -511,37 +510,6 @@ fn parse_semver(tag: &str) -> Option<SemverInfo> {
     })
 }
 
-/// Check if a tag name is a semantic version
-#[cfg(test)]
-fn is_semver_tag(tag: &str) -> bool {
-    parse_semver(tag).is_some()
-}
-
-/// Parse a GitHub URL to extract owner and repo
-pub(crate) fn parse_github_url(url: &str) -> Option<(String, String)> {
-    // Handle both HTTPS and SSH URLs
-    // HTTPS: https://github.com/owner/repo.git
-    // SSH: git@github.com:owner/repo.git
-
-    if url.contains("github.com") {
-        let parts: Vec<&str> = if url.starts_with("git@") {
-            url.split(':').collect()
-        } else {
-            url.split("github.com/").collect()
-        };
-
-        if let Some(path) = parts.last() {
-            let path = path.trim_end_matches(".git");
-            let repo_parts: Vec<&str> = path.split('/').collect();
-            if repo_parts.len() >= 2 {
-                return Some((repo_parts[0].to_string(), repo_parts[1].to_string()));
-            }
-        }
-    }
-
-    None
-}
-
 /// Format git time to a human-readable string
 fn format_git_time(time: &Time) -> String {
     use chrono::{DateTime, TimeZone, Utc};
@@ -555,6 +523,11 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    /// Check if a tag name is a semantic version
+    fn is_semver_tag(tag: &str) -> bool {
+        parse_semver(tag).is_some()
+    }
 
     #[test]
     fn test_parse_semver_2_part() {
