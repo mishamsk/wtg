@@ -52,6 +52,34 @@ async fn integration_identify_file() {
     insta::assert_yaml_snapshot!(snapshot);
 }
 
+/// Test finding closing PRs for a GitHub issue
+/// This tests the ability to find PRs that close issues, specifically
+/// testing that we prioritize Closed events with `commit_id` and only
+/// consider merged PRs.
+/// <https://github.com/ghostty-org/ghostty/issues/4800>
+#[tokio::test]
+async fn integration_identify_ghostty_issue_4800() {
+    use wtg_cli::github::{GhRepoInfo, GitHubClient};
+
+    // Create a GitHub client for the ghostty repository
+    let repo_info = GhRepoInfo::new("ghostty-org".to_string(), "ghostty".to_string());
+    let client = GitHubClient::new(repo_info);
+
+    // Fetch the issue
+    let issue = client
+        .fetch_issue(4800)
+        .await
+        .expect("Failed to fetch ghostty issue #4800");
+
+    assert_eq!(
+        issue.closing_prs.len(),
+        1,
+        "Expected exactly one closing PR"
+    );
+
+    assert_eq!(issue.closing_prs[0].number, 7704);
+}
+
 /// Convert `IdentifiedThing` to a consistent snapshot structure
 fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
     match result {

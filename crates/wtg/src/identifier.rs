@@ -1,6 +1,6 @@
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{GitHubClient, IssueInfo, PullRequestInfo, ReleaseInfo};
+use crate::github::{ExtendedIssueInfo, GitHubClient, PullRequestInfo, ReleaseInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -12,6 +12,32 @@ pub enum EntryPoint {
     PullRequestNumber(u64), // PR # they entered
     FilePath(String),       // File path they entered
     Tag(String),            // Tag they entered
+}
+
+/// Information about an Issue
+#[derive(Debug, Clone)]
+pub struct IssueInfo {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: octocrab::models::IssueState,
+    pub url: String,
+    pub author: Option<String>,
+    pub author_url: Option<String>,
+}
+
+impl From<&ExtendedIssueInfo> for IssueInfo {
+    fn from(ext_info: &ExtendedIssueInfo) -> Self {
+        Self {
+            number: ext_info.number,
+            title: ext_info.title.clone(),
+            body: ext_info.body.clone(),
+            state: ext_info.state.clone(),
+            url: ext_info.url.clone(),
+            author: ext_info.author.clone(),
+            author_url: ext_info.author_url.clone(),
+        }
+    }
 }
 
 /// The enriched result of identification - progressively accumulates data
@@ -159,42 +185,40 @@ async fn resolve_number(
         })));
     }
 
-    if let Some(issue_info) = Box::pin(gh.fetch_issue(number)).await {
-        for pr_ref in &issue_info.closing_prs {
-            if let Some(pr_info) = Box::pin(gh.fetch_pr_ref(pr_ref.clone())).await {
-                if let Some(merge_sha) = &pr_info.merge_commit_sha
-                    && let Some(commit_info) = git.find_commit(merge_sha)
-                {
-                    let (commit_url, commit_author_github_url) =
-                        resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash)
-                            .await;
+    if let Some(ext_issue_info) = Box::pin(gh.fetch_issue(number)).await {
+        let display_issue_info: IssueInfo = (&ext_issue_info).into();
+        if let Some(pr_info) = ext_issue_info.closing_prs.into_iter().next() {
+            if let Some(merge_sha) = &pr_info.merge_commit_sha
+                && let Some(commit_info) = git.find_commit(merge_sha)
+            {
+                let (commit_url, commit_author_github_url) =
+                    resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash)
+                        .await;
 
-                    let commit_date = commit_info.date_rfc3339();
-                    let release =
-                        resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date))
-                            .await;
-
-                    return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
-                        entry_point: EntryPoint::IssueNumber(number),
-                        commit: Some(commit_info),
-                        commit_url,
-                        commit_author_github_url,
-                        pr: Some(pr_info),
-                        issue: Some(issue_info),
-                        release,
-                    })));
-                }
+                let commit_date = commit_info.date_rfc3339();
+                let release =
+                    resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date)).await;
 
                 return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
                     entry_point: EntryPoint::IssueNumber(number),
-                    commit: None,
-                    commit_url: None,
-                    commit_author_github_url: None,
+                    commit: Some(commit_info),
+                    commit_url,
+                    commit_author_github_url,
                     pr: Some(pr_info),
-                    issue: Some(issue_info),
-                    release: None,
+                    issue: Some(display_issue_info),
+                    release,
                 })));
             }
+
+            return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
+                entry_point: EntryPoint::IssueNumber(number),
+                commit: None,
+                commit_url: None,
+                commit_author_github_url: None,
+                pr: Some(pr_info),
+                issue: Some(display_issue_info),
+                release: None,
+            })));
         }
 
         return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
@@ -203,7 +227,7 @@ async fn resolve_number(
             commit_url: None,
             commit_author_github_url: None,
             pr: None,
-            issue: Some(issue_info),
+            issue: Some(display_issue_info),
             release: None,
         })));
     }

@@ -60,10 +60,12 @@ pub struct GitHubClient {
 #[derive(Debug, Clone)]
 pub struct PullRequestInfo {
     pub number: u64,
+    pub repo_info: Option<GhRepoInfo>,
     pub title: String,
     pub body: Option<String>,
     pub state: String,
     pub url: String,
+    pub merged: bool,
     pub merge_commit_sha: Option<String>,
     pub author: Option<String>,
     pub author_url: Option<String>,
@@ -78,10 +80,12 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequestInfo {
 
         Self {
             number: pr.number,
+            repo_info: parse_github_repo_url(pr.url.as_str()),
             title: pr.title.unwrap_or_default(),
             body: pr.body,
             state: format!("{:?}", pr.state),
             url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+            merged: pr.merged.unwrap_or(false),
             merge_commit_sha: pr.merge_commit_sha,
             author,
             author_url,
@@ -100,7 +104,7 @@ pub struct PullRequestRef {
 
 /// Information about an Issue
 #[derive(Debug, Clone)]
-pub struct IssueInfo {
+pub struct ExtendedIssueInfo {
     pub number: u64,
     pub title: String,
     pub body: Option<String>,
@@ -108,11 +112,11 @@ pub struct IssueInfo {
     pub url: String,
     pub author: Option<String>,
     pub author_url: Option<String>,
-    pub closing_prs: Vec<PullRequestRef>, // PRs that closed this issue (may be cross-repo)
+    pub closing_prs: Vec<PullRequestInfo>, // PRs that closed this issue (may be cross-repo)
     pub created_at: Option<DateTime<Utc>>, // When the issue was created
 }
 
-impl TryFrom<octocrab::models::issues::Issue> for IssueInfo {
+impl TryFrom<octocrab::models::issues::Issue> for ExtendedIssueInfo {
     type Error = ();
 
     fn try_from(issue: octocrab::models::issues::Issue) -> Result<Self, Self::Error> {
@@ -300,7 +304,7 @@ impl GitHubClient {
     }
 
     /// Try to fetch an issue
-    pub async fn fetch_issue(&self, number: u64) -> Option<IssueInfo> {
+    pub async fn fetch_issue(&self, number: u64) -> Option<ExtendedIssueInfo> {
         let issue = self
             .call_client_api_with_fallback(|client, gh| {
                 Box::pin(async move { client.issues(gh.owner(), gh.repo()).get(number).await })
@@ -308,7 +312,7 @@ impl GitHubClient {
             .await
             .ok()?;
 
-        let mut issue_info = IssueInfo::try_from(issue).ok()?;
+        let mut issue_info = ExtendedIssueInfo::try_from(issue).ok()?;
 
         // Only fetch timeline for closed issues (open issues can't have closing PRs)
         if matches!(issue_info.state, octocrab::models::IssueState::Closed) {
@@ -320,7 +324,10 @@ impl GitHubClient {
 
     /// Find closing PRs for an issue by examining timeline events
     /// Returns list of PR references (may be from different repositories)
-    async fn find_closing_prs(&self, issue_number: u64) -> Vec<PullRequestRef> {
+    /// Priority:
+    /// 1. Closed events with `commit_id` (clearly indicate the PR/commit that closed the issue)
+    /// 2. CrossReferenced/Referenced events (fallback, but only merged PRs)
+    async fn find_closing_prs(&self, issue_number: u64) -> Vec<PullRequestInfo> {
         let mut closing_prs = Vec::new();
 
         // Try to get first page with auth client, fallback to anonymous
@@ -337,17 +344,14 @@ impl GitHubClient {
             })
             .await
         else {
-            return closing_prs;
+            return Vec::new();
         };
 
+        // Collect all timeline events to get closing commits and referenced PRs
         loop {
             for event in &current_page.items {
-                if let Some(source) = event.source.as_ref()
-                    && matches!(
-                        event.event,
-                        TimelineEventType::CrossReferenced | TimelineEventType::Referenced
-                    )
-                {
+                // Collect candidate PRs from cross-references
+                if let Some(source) = event.source.as_ref() {
                     let issue = &source.issue;
                     if issue.pull_request.is_some() {
                         // Extract repository info from repository_url using existing parser
@@ -359,13 +363,40 @@ impl GitHubClient {
                                 owner: repo_info.owner().to_string(),
                                 repo: repo_info.repo().to_string(),
                             };
+
+                            let Some(pr_info) = Box::pin(self.fetch_pr_ref(pr_ref)).await else {
+                                continue; // Skip if PR fetch failed
+                            };
+
+                            if !pr_info.merged {
+                                continue; // Only consider merged PRs
+                            }
+
+                            if matches!(event.event, TimelineEventType::Closed) {
+                                // If it's a Closed event, assume this is the closing PR
+                                closing_prs.push(pr_info);
+                                break; // No need to check further events
+                            }
+
+                            // Otherwise, only consider CrossReferenced/Referenced events
+                            if !matches!(
+                                event.event,
+                                TimelineEventType::CrossReferenced | TimelineEventType::Referenced
+                            ) {
+                                continue;
+                            }
+
                             // Check if we already have this PR
                             if !closing_prs.iter().any(|p| {
-                                p.number == pr_ref.number
-                                    && p.owner == pr_ref.owner
-                                    && p.repo == pr_ref.repo
+                                p.number == issue.number
+                                    && p.repo_info
+                                        .as_ref()
+                                        .is_some_and(|ri| ri.owner() == repo_info.owner())
+                                    && p.repo_info
+                                        .as_ref()
+                                        .is_some_and(|ri| ri.repo() == repo_info.repo())
                             }) {
-                                closing_prs.push(pr_ref);
+                                closing_prs.push(pr_info);
                             }
                         }
                     }

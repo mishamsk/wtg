@@ -242,7 +242,7 @@ fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
 }
 
 /// Display issue information (enrichment layer 2)
-fn display_issue_section(issue: &crate::github::IssueInfo) {
+fn display_issue_section(issue: &crate::identifier::IssueInfo) {
     println!("{}", "🐛 The Issue:".red().bold());
     println!(
         "   {} #{}",
