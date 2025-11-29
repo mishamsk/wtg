@@ -1,14 +1,17 @@
 use chrono::{DateTime, Utc};
 use octocrab::{
     Octocrab, OctocrabBuilder, Result as OctoResult,
-    models::{Event as TimelineEventType, repos::RepoCommit, timelines::TimelineEvent},
+    models::{
+        Event as TimelineEventType, commits::GithubCommitStatus, repos::RepoCommit,
+        timelines::TimelineEvent,
+    },
 };
 use serde::Deserialize;
 use std::{future::Future, pin::Pin, time::Duration};
 
 use crate::{
     error::{WtgError, WtgResult},
-    git::CommitInfo,
+    git::{CommitInfo, TagInfo, parse_semver},
     parse_url::parse_github_repo_url,
 };
 
@@ -620,6 +623,59 @@ impl GitHubClient {
             url: release.html_url.to_string(),
             published_at: release.published_at.map(|dt| dt.to_string()),
             prerelease: release.prerelease,
+        })
+    }
+
+    /// Fetch tag info for a release by checking if target commit is contained in the tag.
+    /// Uses GitHub compare API to verify ancestry and get tag's commit hash.
+    /// Returns None if the tag doesn't contain the target commit.
+    pub async fn fetch_tag_info_for_release(
+        &self,
+        release: &ReleaseInfo,
+        repo_info: &GhRepoInfo,
+        target_commit: &str,
+    ) -> Option<TagInfo> {
+        let tag_name = release.tag_name.clone();
+        let target_commit = target_commit.to_string();
+
+        // Use compare API with per_page=1 to optimize
+        let compare = self
+            .call_client_api_with_fallback(move |client, _| {
+                let tag_name = tag_name.clone();
+                let target_commit = target_commit.clone();
+                let repo_info = repo_info.clone();
+                Box::pin(async move {
+                    client
+                        .commits(repo_info.owner(), repo_info.repo())
+                        .compare(&tag_name, &target_commit)
+                        .per_page(1)
+                        .send()
+                        .await
+                })
+            })
+            .await
+            .ok()?;
+
+        // If status is "behind" or "identical", the target commit is in the tag's history
+        // "ahead" or "diverged" means the commit is NOT in the tag
+        if !matches!(
+            compare.status,
+            GithubCommitStatus::Behind | GithubCommitStatus::Identical
+        ) {
+            return None;
+        }
+
+        let semver_info = parse_semver(&release.tag_name);
+
+        Some(TagInfo {
+            name: release.tag_name.clone(),
+            commit_hash: compare.base_commit.sha,
+            is_semver: semver_info.is_some(),
+            semver_info,
+            is_release: true,
+            release_name: release.name.clone(),
+            release_url: Some(release.url.clone()),
+            published_at: release.published_at.clone(),
         })
     }
 

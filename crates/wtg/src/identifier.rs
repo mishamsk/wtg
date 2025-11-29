@@ -1,6 +1,6 @@
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{ExtendedIssueInfo, GitHubClient, PullRequestInfo, ReleaseInfo};
+use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo, ReleaseInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -264,7 +264,7 @@ async fn resolve_release_for_commit(
     github: Option<&GitHubClient>,
     commit_hash: &str,
     fallback_since: Option<&str>,
-    pr_repo_info: Option<&crate::github::GhRepoInfo>,
+    pr_repo_info: Option<&GhRepoInfo>,
 ) -> Option<TagInfo> {
     let candidates = collect_tag_candidates(git, commit_hash);
     let has_semver = candidates.iter().any(|candidate| candidate.info.is_semver);
@@ -316,6 +316,8 @@ async fn resolve_release_for_commit(
 
     resolve_release_from_data(
         git,
+        github,
+        pr_repo_info,
         candidates,
         &targeted_releases,
         if fallback_releases.is_empty() {
@@ -326,6 +328,7 @@ async fn resolve_release_for_commit(
         commit_hash,
         has_semver,
     )
+    .await
 }
 
 struct TagCandidate {
@@ -346,8 +349,10 @@ fn collect_tag_candidates(git: &GitRepo, commit_hash: &str) -> Vec<TagCandidate>
         .collect()
 }
 
-fn resolve_release_from_data(
+async fn resolve_release_from_data(
     git: &GitRepo,
+    github: Option<&GitHubClient>,
+    pr_repo_info: Option<&GhRepoInfo>,
     mut candidates: Vec<TagCandidate>,
     targeted_releases: &[ReleaseInfo],
     fallback_releases: Option<&[ReleaseInfo]>,
@@ -362,26 +367,42 @@ fn resolve_release_from_data(
         return local_best;
     }
 
-    let fallback_best = fallback_releases.and_then(|releases| {
-        let remote_candidates = releases
-            .iter()
-            .filter_map(|release| {
-                git.tag_from_release(release).and_then(|tag| {
-                    if git.tag_contains_commit(&tag.commit_hash, commit_hash) {
-                        let timestamp = git.get_commit_timestamp(&tag.commit_hash);
-                        Some(TagCandidate {
-                            info: tag,
-                            timestamp,
-                        })
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
+    let fallback_best = if let Some(releases) = fallback_releases {
+        let mut remote_candidates = Vec::new();
+
+        for release in releases {
+            // Try to get tag from local git first
+            let tag_opt = git.tag_from_release(release);
+
+            // If local tag exists, check if it contains the commit
+            if let Some(tag) = tag_opt {
+                if git.tag_contains_commit(&tag.commit_hash, commit_hash) {
+                    let timestamp = git.get_commit_timestamp(&tag.commit_hash);
+                    remote_candidates.push(TagCandidate {
+                        info: tag,
+                        timestamp,
+                    });
+                }
+            } else if let Some(gh) = github
+                && let Some(pr_repo) = pr_repo_info
+            {
+                // Fallback: tag doesn't exist locally, try GitHub API
+                if let Some(tag) = gh
+                    .fetch_tag_info_for_release(release, pr_repo, commit_hash)
+                    .await
+                {
+                    remote_candidates.push(TagCandidate {
+                        info: tag,
+                        timestamp: 1, // TODO: refactor to store timestamps on releases
+                    });
+                }
+            }
+        }
 
         pick_best_tag(&remote_candidates)
-    });
+    } else {
+        None
+    };
 
     fallback_best.or(local_best)
 }

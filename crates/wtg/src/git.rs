@@ -475,7 +475,7 @@ static SEMVER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// - Build metadata: 1.0.0+build.123
 /// - With or without 'v' prefix (e.g., v1.0.0)
 /// - With custom prefixes (e.g., py-v1.0.0, rust-v1.0.0, python-1.0.0)
-fn parse_semver(tag: &str) -> Option<SemverInfo> {
+pub fn parse_semver(tag: &str) -> Option<SemverInfo> {
     let caps = SEMVER_REGEX.captures(tag)?;
 
     let major = caps.get(1)?.as_str().parse::<u32>().ok()?;
