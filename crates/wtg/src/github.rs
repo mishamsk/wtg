@@ -1,15 +1,61 @@
 use chrono::{DateTime, Utc};
 use octocrab::{
     Octocrab, OctocrabBuilder, Result as OctoResult,
-    models::{Event as TimelineEventType, timelines::TimelineEvent},
+    models::{Event as TimelineEventType, repos::RepoCommit, timelines::TimelineEvent},
 };
 use serde::Deserialize;
 use std::{future::Future, pin::Pin, time::Duration};
 
 use crate::{
     error::{WtgError, WtgResult},
+    git::CommitInfo,
     parse_url::parse_github_repo_url,
 };
+
+impl From<RepoCommit> for CommitInfo {
+    fn from(commit: RepoCommit) -> Self {
+        let message = commit.commit.message;
+        let message_lines = message.lines().count();
+        let author_name = commit
+            .commit
+            .author
+            .as_ref()
+            .map_or_else(|| "Unknown".to_string(), |a| a.name.clone());
+        let author_email = commit
+            .commit
+            .author
+            .as_ref()
+            .and_then(|a| a.email.clone())
+            .unwrap_or_default();
+
+        let (date, timestamp) = commit
+            .commit
+            .author
+            .as_ref()
+            .and_then(|a| a.date.as_ref())
+            .map_or_else(
+                || (String::new(), 0),
+                |date_time| {
+                    let date = date_time.format("%Y-%m-%d %H:%M:%S").to_string();
+                    let timestamp = date_time.timestamp();
+                    (date, timestamp)
+                },
+            );
+
+        let full_hash = commit.sha;
+
+        Self {
+            hash: full_hash.clone(),
+            short_hash: full_hash[..7.min(full_hash.len())].to_string(),
+            message: message.lines().next().unwrap_or("").to_string(),
+            message_lines,
+            author_name,
+            author_email,
+            date,
+            timestamp,
+        }
+    }
+}
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 const READ_TIMEOUT_SECS: u64 = 30;
@@ -149,6 +195,7 @@ pub struct ReleaseInfo {
     pub name: Option<String>,
     pub url: String,
     pub published_at: Option<String>,
+    pub prerelease: bool,
 }
 
 impl GitHubClient {
@@ -272,6 +319,31 @@ impl GitHubClient {
             .map(|author| (author.login, author.html_url.into()));
 
         Some((commit_hash, commit_url, author_info))
+    }
+
+    /// Fetch full commit information from a specific repository
+    /// This is used for cross-project PRs where the commit is in a different repo
+    /// Returns all the information needed to construct a `CommitInfo`
+    pub async fn fetch_commit_full_info(
+        &self,
+        repo_info: &GhRepoInfo,
+        commit_hash: &str,
+    ) -> Option<CommitInfo> {
+        let commit = self
+            .call_client_api_with_fallback(move |client, _gh| {
+                let hash = commit_hash.to_string();
+                let repo_info = repo_info.clone();
+                Box::pin(async move {
+                    client
+                        .commits(repo_info.owner(), repo_info.repo())
+                        .get(&hash)
+                        .await
+                })
+            })
+            .await
+            .ok()?;
+
+        Some(commit.into())
     }
 
     /// Try to fetch a PR
@@ -428,6 +500,17 @@ impl GitHubClient {
     /// This significantly speeds up lookups for recent PRs/issues
     #[allow(clippy::too_many_lines)]
     pub async fn fetch_releases_since(&self, since_date: Option<&str>) -> Vec<ReleaseInfo> {
+        self.fetch_releases_since_for_repo(&self.repo_info, since_date)
+            .await
+    }
+
+    /// Fetch releases from a specific repository, optionally filtered by date
+    #[allow(clippy::too_many_lines)]
+    pub async fn fetch_releases_since_for_repo(
+        &self,
+        repo_info: &GhRepoInfo,
+        since_date: Option<&str>,
+    ) -> Vec<ReleaseInfo> {
         let mut releases = Vec::new();
         let mut page_num = 1u32;
         let per_page = 100u8; // Max allowed by GitHub API
@@ -441,10 +524,11 @@ impl GitHubClient {
 
         // Try to get first page with auth client, fallback to anonymous
         let Ok((mut current_page, client)) = self
-            .call_api_and_get_client(|client, gh| {
+            .call_api_and_get_client(move |client, _| {
+                let repo_info = repo_info.clone();
                 Box::pin(async move {
                     client
-                        .repos(gh.owner(), gh.repo())
+                        .repos(repo_info.owner(), repo_info.repo())
                         .releases()
                         .list()
                         .per_page(per_page)
@@ -482,6 +566,7 @@ impl GitHubClient {
                     name: release.name,
                     url: release.html_url.to_string(),
                     published_at: published_at_str,
+                    prerelease: release.prerelease,
                 });
             }
 
@@ -494,7 +579,7 @@ impl GitHubClient {
             // Fetch next page
             current_page = match Self::await_with_timeout_and_error(
                 client
-                    .repos(self.owner(), self.repo())
+                    .repos(repo_info.owner(), repo_info.repo())
                     .releases()
                     .list()
                     .per_page(per_page)
@@ -534,6 +619,7 @@ impl GitHubClient {
             name: release.name,
             url: release.html_url.to_string(),
             published_at: release.published_at.map(|dt| dt.to_string()),
+            prerelease: release.prerelease,
         })
     }
 

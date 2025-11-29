@@ -291,14 +291,25 @@ fn display_missing_info(info: &EnrichedInfo) {
         println!();
     }
 
-    // PR without commit (not merged)
-    if info.pr.is_some() && info.commit.is_none() {
-        println!(
-            "{}",
-            "⏳ This PR hasn't been merged yet, too scared to commit!"
-                .yellow()
-                .italic()
-        );
+    // PR without commit (either not merged, or merged but from a cross-project ref we do not have access to)
+    if let Some(pr_info) = info.pr.as_ref()
+        && info.commit.is_none()
+    {
+        if pr_info.merged {
+            println!(
+                "{}",
+                "⏳ PR merged, but alas, the commit is out of reach!"
+                    .yellow()
+                    .italic()
+            );
+        } else {
+            println!(
+                "{}",
+                "⏳ This PR hasn't been merged yet, too scared to commit!"
+                    .yellow()
+                    .italic()
+            );
+        }
         println!();
     }
 }
