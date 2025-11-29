@@ -7,7 +7,7 @@ use octocrab::{
     },
 };
 use serde::Deserialize;
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin, sync::LazyLock, time::Duration};
 
 use crate::{
     error::{WtgError, WtgResult},
@@ -111,10 +111,10 @@ impl GhRepoInfo {
 /// - Handles authentication via `GITHUB_TOKEN` env var or gh CLI config.
 /// - Supports fallback to anonymous requests when auth fails.
 /// - Converts known octocrab errors into `WtgError` variants.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GitHubClient {
     auth_client: Option<Octocrab>,
-    anonymous_client: Option<Octocrab>,
+    anonymous_client: LazyLock<Option<Octocrab>>,
 }
 
 /// Information about a Pull Request
@@ -216,11 +216,10 @@ impl GitHubClient {
     #[must_use]
     pub fn new() -> Self {
         let auth_client = Self::build_auth_client();
-        let anonymous_client = Self::build_anonymous_client();
 
         Self {
             auth_client,
-            anonymous_client,
+            anonymous_client: LazyLock::new(Self::build_anonymous_client),
         }
     }
 
