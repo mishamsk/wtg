@@ -1,6 +1,8 @@
-use crate::error::{Result, WtgError};
-use crate::github::ReleaseInfo;
-use git2::{Commit, Oid, Repository, Time};
+use crate::error::{WtgError, WtgResult};
+use crate::github::{GhRepoInfo, ReleaseInfo};
+use crate::parse_url::parse_github_repo_url;
+use chrono::{DateTime, TimeZone, Utc};
+use git2::{Commit, Oid, Repository};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -17,20 +19,12 @@ pub struct CommitInfo {
     pub short_hash: String,
     pub message: String,
     pub message_lines: usize,
+    pub commit_url: Option<String>,
     pub author_name: String,
-    pub author_email: String,
-    pub date: String,
-    pub timestamp: i64, // Unix timestamp for the commit
-}
-
-impl CommitInfo {
-    /// Get the commit date as an RFC3339 string for GitHub API filtering
-    #[must_use]
-    pub fn date_rfc3339(&self) -> String {
-        use chrono::{DateTime, TimeZone, Utc};
-        let datetime: DateTime<Utc> = Utc.timestamp_opt(self.timestamp, 0).unwrap();
-        datetime.to_rfc3339()
-    }
+    pub author_email: Option<String>,
+    pub author_login: Option<String>,
+    pub author_url: Option<String>,
+    pub date: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,12 +38,32 @@ pub struct FileInfo {
 pub struct TagInfo {
     pub name: String,
     pub commit_hash: String,
-    pub is_semver: bool,
     pub semver_info: Option<SemverInfo>,
-    pub is_release: bool,             // Whether this is a GitHub release
+    pub created_at: DateTime<Utc>, // Timestamp of the commit the tag points to
+    pub is_release: bool,          // Whether this is a GitHub release
     pub release_name: Option<String>, // GitHub release name (if is_release)
-    pub release_url: Option<String>,  // GitHub release URL (if is_release)
-    pub published_at: Option<String>, // GitHub release published date (if is_release)
+    pub release_url: Option<String>, // GitHub release URL (if is_release)
+    pub published_at: Option<DateTime<Utc>>, // GitHub release published date (if is_release)
+}
+
+impl TagInfo {
+    /// Whether this is a semver tag
+    #[must_use]
+    pub const fn is_semver(&self) -> bool {
+        self.semver_info.is_some()
+    }
+
+    /// Whether this tag represents a stable release (no pre-release, no build metadata)
+    #[must_use]
+    pub const fn is_stable_semver(&self) -> bool {
+        if let Some(semver) = &self.semver_info {
+            semver.pre_release.is_none()
+                && semver.build_metadata.is_none()
+                && semver.build.is_none()
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +78,7 @@ pub struct SemverInfo {
 
 impl GitRepo {
     /// Open the git repository from the current directory
-    pub fn open() -> Result<Self> {
+    pub fn open() -> WtgResult<Self> {
         let repo = Repository::discover(".").map_err(|_| WtgError::NotInGitRepo)?;
         let path = repo.path().to_path_buf();
         Ok(Self {
@@ -74,7 +88,7 @@ impl GitRepo {
     }
 
     /// Open the git repository from a specific path
-    pub fn from_path(path: &Path) -> Result<Self> {
+    pub fn from_path(path: &Path) -> WtgResult<Self> {
         let repo = Repository::open(path).map_err(|_| WtgError::NotInGitRepo)?;
         let repo_path = repo.path().to_path_buf();
         Ok(Self {
@@ -215,7 +229,6 @@ impl GitRepo {
                         && let Ok(commit) = obj.peel_to_commit()
                     {
                         let semver_info = parse_semver(tag_name);
-                        let is_semver = semver_info.is_some();
 
                         let (is_release, release_name, release_url, published_at) = release_map
                             .get(tag_name)
@@ -224,15 +237,15 @@ impl GitRepo {
                                     true,
                                     release.name.clone(),
                                     Some(release.url.clone()),
-                                    release.published_at.clone(),
+                                    release.published_at,
                                 )
                             });
 
                         tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: commit.id().to_string(),
-                            is_semver,
                             semver_info,
+                            created_at: git_time_to_datetime(commit.time()),
                             is_release,
                             release_name,
                             release_url,
@@ -268,12 +281,12 @@ impl GitRepo {
             Some(TagInfo {
                 name: release.tag_name.clone(),
                 commit_hash: commit.id().to_string(),
-                is_semver: semver_info.is_some(),
                 semver_info,
                 is_release: true,
                 release_name: release.name.clone(),
                 release_url: Some(release.url.clone()),
-                published_at: release.published_at.clone(),
+                published_at: release.published_at,
+                created_at: git_time_to_datetime(commit.time()),
             })
         })
     }
@@ -325,8 +338,8 @@ impl GitRepo {
                         containing_tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: tag_oid.to_string(),
-                            is_semver: semver_info.is_some(),
                             semver_info,
+                            created_at: git_time_to_datetime(commit.time()),
                             is_release: false,
                             release_name: None,
                             release_url: None,
@@ -364,14 +377,13 @@ impl GitRepo {
 
     /// Get the GitHub remote URL if it exists (checks all remotes)
     #[must_use]
-    pub fn github_remote(&self) -> Option<(String, String)> {
+    pub fn github_remote(&self) -> Option<GhRepoInfo> {
         self.with_repo(|repo| {
             for remote_name in ["origin", "upstream"] {
                 if let Ok(remote) = repo.find_remote(remote_name)
                     && let Some(url) = remote.url()
-                    && let Some(github_info) = parse_github_url(url)
                 {
-                    return Some(github_info);
+                    return parse_github_repo_url(url);
                 }
             }
 
@@ -379,9 +391,8 @@ impl GitRepo {
                 for remote_name in remotes.iter().flatten() {
                     if let Ok(remote) = repo.find_remote(remote_name)
                         && let Some(url) = remote.url()
-                        && let Some(github_info) = parse_github_url(url)
                     {
-                        return Some(github_info);
+                        return parse_github_repo_url(url);
                     }
                 }
             }
@@ -402,10 +413,12 @@ impl GitRepo {
             short_hash: commit.id().to_string()[..7].to_string(),
             message: (*lines.first().unwrap_or(&"")).to_string(),
             message_lines,
+            commit_url: None,
             author_name: commit.author().name().unwrap_or("Unknown").to_string(),
-            author_email: commit.author().email().unwrap_or("").to_string(),
-            date: format_git_time(&time),
-            timestamp: time.seconds(),
+            author_email: commit.author().email().map(str::to_string),
+            author_login: None,
+            author_url: None,
+            date: Utc.timestamp_opt(time.seconds(), 0).unwrap(),
         }
     }
 }
@@ -476,7 +489,7 @@ static SEMVER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// - Build metadata: 1.0.0+build.123
 /// - With or without 'v' prefix (e.g., v1.0.0)
 /// - With custom prefixes (e.g., py-v1.0.0, rust-v1.0.0, python-1.0.0)
-fn parse_semver(tag: &str) -> Option<SemverInfo> {
+pub fn parse_semver(tag: &str) -> Option<SemverInfo> {
     let caps = SEMVER_REGEX.captures(tag)?;
 
     let major = caps.get(1)?.as_str().parse::<u32>().ok()?;
@@ -511,43 +524,10 @@ fn parse_semver(tag: &str) -> Option<SemverInfo> {
     })
 }
 
-/// Check if a tag name is a semantic version
-#[cfg(test)]
-fn is_semver_tag(tag: &str) -> bool {
-    parse_semver(tag).is_some()
-}
-
-/// Parse a GitHub URL to extract owner and repo
-fn parse_github_url(url: &str) -> Option<(String, String)> {
-    // Handle both HTTPS and SSH URLs
-    // HTTPS: https://github.com/owner/repo.git
-    // SSH: git@github.com:owner/repo.git
-
-    if url.contains("github.com") {
-        let parts: Vec<&str> = if url.starts_with("git@") {
-            url.split(':').collect()
-        } else {
-            url.split("github.com/").collect()
-        };
-
-        if let Some(path) = parts.last() {
-            let path = path.trim_end_matches(".git");
-            let repo_parts: Vec<&str> = path.split('/').collect();
-            if repo_parts.len() >= 2 {
-                return Some((repo_parts[0].to_string(), repo_parts[1].to_string()));
-            }
-        }
-    }
-
-    None
-}
-
-/// Format git time to a human-readable string
-fn format_git_time(time: &Time) -> String {
-    use chrono::{DateTime, TimeZone, Utc};
-
-    let datetime: DateTime<Utc> = Utc.timestamp_opt(time.seconds(), 0).unwrap();
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+/// Convert `git2::Time` to `chrono::DateTime<Utc>`
+#[must_use]
+pub fn git_time_to_datetime(time: git2::Time) -> DateTime<Utc> {
+    Utc.timestamp_opt(time.seconds(), 0).unwrap()
 }
 
 #[cfg(test)]
@@ -555,6 +535,11 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    /// Check if a tag name is a semantic version
+    fn is_semver_tag(tag: &str) -> bool {
+        parse_semver(tag).is_some()
+    }
 
     #[test]
     fn test_parse_semver_2_part() {

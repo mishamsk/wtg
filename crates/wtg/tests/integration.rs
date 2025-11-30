@@ -52,6 +52,34 @@ async fn integration_identify_file() {
     insta::assert_yaml_snapshot!(snapshot);
 }
 
+/// Test finding closing PRs for a GitHub issue
+/// This tests the ability to find PRs that close issues, specifically
+/// testing that we prioritize Closed events with `commit_id` and only
+/// consider merged PRs.
+/// <https://github.com/ghostty-org/ghostty/issues/4800>
+#[tokio::test]
+async fn integration_identify_ghostty_issue_4800() {
+    use wtg_cli::github::{GhRepoInfo, GitHubClient};
+
+    // Create a GitHub client for the ghostty repository
+    let repo_info = GhRepoInfo::new("ghostty-org".to_string(), "ghostty".to_string());
+    let client = GitHubClient::new();
+
+    // Fetch the issue
+    let issue = client
+        .fetch_issue(&repo_info, 4800)
+        .await
+        .expect("Failed to fetch ghostty issue #4800");
+
+    assert_eq!(
+        issue.closing_prs.len(),
+        1,
+        "Expected exactly one closing PR"
+    );
+
+    assert_eq!(issue.closing_prs[0].number, 7704);
+}
+
 /// Convert `IdentifiedThing` to a consistent snapshot structure
 fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
     match result {
@@ -60,11 +88,15 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             entry_point: Some(format!("{:?}", info.entry_point)),
             commit_message: info.commit.as_ref().map(|c| c.message.clone()),
             commit_author: info.commit.as_ref().map(|c| c.author_name.clone()),
-            has_commit_url: info.commit_url.is_some(),
+            has_commit_url: info
+                .commit
+                .as_ref()
+                .and_then(|ci| ci.commit_url.as_deref())
+                .is_some(),
             has_pr: info.pr.is_some(),
             has_issue: info.issue.is_some(),
             release_name: info.release.as_ref().map(|r| r.name.clone()),
-            release_is_semver: info.release.as_ref().map(|r| r.is_semver),
+            release_is_semver: info.release.as_ref().map(wtg_cli::git::TagInfo::is_semver),
             tag_name: None,
             file_path: None,
             previous_authors_count: None,
@@ -82,7 +114,7 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             } else {
                 None
             },
-            release_is_semver: Some(tag_info.is_semver),
+            release_is_semver: Some(tag_info.is_semver()),
             tag_name: Some(tag_info.name.clone()),
             file_path: None,
             previous_authors_count: None,
@@ -96,7 +128,10 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             has_pr: false,
             has_issue: false,
             release_name: file_result.release.as_ref().map(|r| r.name.clone()),
-            release_is_semver: file_result.release.as_ref().map(|r| r.is_semver),
+            release_is_semver: file_result
+                .release
+                .as_ref()
+                .map(wtg_cli::git::TagInfo::is_semver),
             tag_name: None,
             file_path: Some(file_result.file_info.path.clone()),
             previous_authors_count: Some(file_result.file_info.previous_authors.len()),

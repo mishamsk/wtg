@@ -1,6 +1,6 @@
-use crate::error::{Result, WtgError};
+use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{GitHubClient, IssueInfo, PullRequestInfo, ReleaseInfo};
+use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo, ReleaseInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -14,6 +14,32 @@ pub enum EntryPoint {
     Tag(String),            // Tag they entered
 }
 
+/// Information about an Issue
+#[derive(Debug, Clone)]
+pub struct IssueInfo {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: octocrab::models::IssueState,
+    pub url: String,
+    pub author: Option<String>,
+    pub author_url: Option<String>,
+}
+
+impl From<&ExtendedIssueInfo> for IssueInfo {
+    fn from(ext_info: &ExtendedIssueInfo) -> Self {
+        Self {
+            number: ext_info.number,
+            title: ext_info.title.clone(),
+            body: ext_info.body.clone(),
+            state: ext_info.state.clone(),
+            url: ext_info.url.clone(),
+            author: ext_info.author.clone(),
+            author_url: ext_info.author_url.clone(),
+        }
+    }
+}
+
 /// The enriched result of identification - progressively accumulates data
 #[derive(Debug, Clone)]
 pub struct EnrichedInfo {
@@ -21,8 +47,6 @@ pub struct EnrichedInfo {
 
     // Core - the commit (always present for complete results)
     pub commit: Option<CommitInfo>,
-    pub commit_url: Option<String>,
-    pub commit_author_github_url: Option<String>,
 
     // Enrichment Layer 1: PR (if this commit came from a PR)
     pub pr: Option<PullRequestInfo>,
@@ -50,10 +74,9 @@ pub enum IdentifiedThing {
     TagOnly(Box<TagInfo>, Option<String>), // Just a tag, no commit yet
 }
 
-pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
-    let github = git
-        .github_remote()
-        .map(|(owner, repo)| Arc::new(GitHubClient::new(owner, repo)));
+pub async fn identify(input: &str, git: GitRepo) -> WtgResult<IdentifiedThing> {
+    let repo_info = git.github_remote();
+    let github = repo_info.as_ref().map(|_| Arc::new(GitHubClient::new()));
 
     // Try as commit hash first
     if let Some(commit_info) = git.find_commit(input) {
@@ -62,6 +85,7 @@ pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
             commit_info,
             &git,
             github.as_deref(),
+            repo_info.as_ref(),
         )
         .await);
     }
@@ -69,20 +93,23 @@ pub async fn identify(input: &str, git: GitRepo) -> Result<IdentifiedThing> {
     // Try as issue/PR number (if it's all digits or starts with #)
     let number_str = input.strip_prefix('#').unwrap_or(input);
     if let Ok(number) = number_str.parse::<u64>()
-        && let Some(result) = resolve_number(number, &git, github.as_deref()).await
+        && let Some(result) =
+            resolve_number(number, &git, github.as_deref(), repo_info.as_ref()).await
     {
         return Ok(result);
     }
 
     // Try as file path
     if let Some(file_info) = git.find_file(input) {
-        return Ok(resolve_file(file_info, &git, github.as_deref()).await);
+        return Ok(resolve_file(file_info, &git, github.as_deref(), repo_info.as_ref()).await);
     }
 
     // Try as tag
     let tags = git.get_tags();
     if let Some(tag_info) = tags.iter().find(|t| t.name == input) {
-        let github_url = github.as_deref().map(|gh| gh.tag_url(&tag_info.name));
+        let github_url = repo_info
+            .as_ref()
+            .map(|ri| GitHubClient::tag_url(ri, &tag_info.name));
         return Ok(IdentifiedThing::TagOnly(
             Box::new(tag_info.clone()),
             github_url,
@@ -99,19 +126,23 @@ async fn resolve_commit(
     commit_info: CommitInfo,
     git: &GitRepo,
     github: Option<&GitHubClient>,
+    repo_info: Option<&GhRepoInfo>,
 ) -> IdentifiedThing {
-    let (commit_url, commit_author_github_url) =
-        resolve_commit_urls(github, &commit_info.author_email, &commit_info.hash).await;
+    let commit_info = resolve_commit_urls(github, repo_info, commit_info).await;
 
-    let commit_date = commit_info.date_rfc3339();
-    let release =
-        resolve_release_for_commit(git, github, &commit_info.hash, Some(&commit_date)).await;
+    let release = resolve_release_for_commit(
+        git,
+        github,
+        repo_info,
+        &commit_info.hash,
+        Some(commit_info.date),
+        None,
+    )
+    .await;
 
     IdentifiedThing::Enriched(Box::new(EnrichedInfo {
         entry_point,
         commit: Some(commit_info),
-        commit_url,
-        commit_author_github_url,
         pr: None,
         issue: None,
         release,
@@ -119,29 +150,35 @@ async fn resolve_commit(
 }
 
 /// Resolve an issue/PR number
+#[allow(clippy::too_many_lines)]
 async fn resolve_number(
     number: u64,
     git: &GitRepo,
     github: Option<&GitHubClient>,
+    repo_info: Option<&GhRepoInfo>,
 ) -> Option<IdentifiedThing> {
     let gh = github?;
+    let repo_info = repo_info?;
 
-    if let Some(pr_info) = Box::pin(gh.fetch_pr(number)).await {
+    if let Some(pr_info) = Box::pin(gh.fetch_pr(repo_info, number)).await {
         if let Some(merge_sha) = &pr_info.merge_commit_sha
             && let Some(commit_info) = git.find_commit(merge_sha)
         {
-            let (commit_url, commit_author_github_url) =
-                resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash).await;
+            let commit_info = resolve_commit_urls(Some(gh), Some(repo_info), commit_info).await;
 
-            let commit_date = commit_info.date_rfc3339();
-            let release =
-                resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date)).await;
+            let release = resolve_release_for_commit(
+                git,
+                Some(gh),
+                Some(repo_info),
+                merge_sha,
+                Some(commit_info.date),
+                None,
+            )
+            .await;
 
             return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
                 entry_point: EntryPoint::PullRequestNumber(number),
                 commit: Some(commit_info),
-                commit_url,
-                commit_author_github_url,
                 pr: Some(pr_info),
                 issue: None,
                 release,
@@ -151,47 +188,63 @@ async fn resolve_number(
         return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
             entry_point: EntryPoint::PullRequestNumber(number),
             commit: None,
-            commit_url: None,
-            commit_author_github_url: None,
             pr: Some(pr_info),
             issue: None,
             release: None,
         })));
     }
 
-    if let Some(issue_info) = Box::pin(gh.fetch_issue(number)).await {
-        if let Some(&first_pr_number) = issue_info.closing_prs.first()
-            && let Some(pr_info) = Box::pin(gh.fetch_pr(first_pr_number)).await
-        {
-            if let Some(merge_sha) = &pr_info.merge_commit_sha
-                && let Some(commit_info) = git.find_commit(merge_sha)
-            {
-                let (commit_url, commit_author_github_url) =
-                    resolve_commit_urls(Some(gh), &commit_info.author_email, &commit_info.hash)
-                        .await;
+    if let Some(ext_issue_info) = Box::pin(gh.fetch_issue(repo_info, number)).await {
+        let display_issue_info: IssueInfo = (&ext_issue_info).into();
+        if let Some(pr_info) = ext_issue_info.closing_prs.into_iter().next() {
+            if let Some(merge_sha) = &pr_info.merge_commit_sha {
+                // Try to find the commit in the local repository first
+                let mut commit_info = git.find_commit(merge_sha);
 
-                let commit_date = commit_info.date_rfc3339();
-                let release =
-                    resolve_release_for_commit(git, Some(gh), merge_sha, Some(&commit_date)).await;
+                // If not found locally and PR is from a different repo, fetch via GitHub API
+                if commit_info.is_none()
+                    && let Some(pr_repo_info) = &pr_info.repo_info
+                    && (pr_repo_info.owner() != repo_info.owner()
+                        || pr_repo_info.repo() != repo_info.repo())
+                {
+                    commit_info = gh.fetch_commit_full_info(pr_repo_info, merge_sha).await;
+                }
 
-                return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
-                    entry_point: EntryPoint::IssueNumber(number),
-                    commit: Some(commit_info),
-                    commit_url,
-                    commit_author_github_url,
-                    pr: Some(pr_info),
-                    issue: Some(issue_info),
-                    release,
-                })));
+                if let Some(commit_info) = commit_info {
+                    let commit_info =
+                        resolve_commit_urls(Some(gh), Some(repo_info), commit_info).await;
+
+                    // For cross-project PRs, pass the PR's repo info for release fallback
+                    let pr_repo_info = pr_info.repo_info.as_ref().filter(|pr_repo_info| {
+                        pr_repo_info.owner() != repo_info.owner()
+                            || pr_repo_info.repo() != repo_info.repo()
+                    });
+
+                    let release = resolve_release_for_commit(
+                        git,
+                        Some(gh),
+                        Some(repo_info),
+                        merge_sha,
+                        Some(commit_info.date),
+                        pr_repo_info,
+                    )
+                    .await;
+
+                    return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
+                        entry_point: EntryPoint::IssueNumber(number),
+                        commit: Some(commit_info),
+                        pr: Some(pr_info),
+                        issue: Some(display_issue_info),
+                        release,
+                    })));
+                }
             }
 
             return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
                 entry_point: EntryPoint::IssueNumber(number),
                 commit: None,
-                commit_url: None,
-                commit_author_github_url: None,
                 pr: Some(pr_info),
-                issue: Some(issue_info),
+                issue: Some(display_issue_info),
                 release: None,
             })));
         }
@@ -199,10 +252,8 @@ async fn resolve_number(
         return Some(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
             entry_point: EntryPoint::IssueNumber(number),
             commit: None,
-            commit_url: None,
-            commit_author_github_url: None,
             pr: None,
-            issue: Some(issue_info),
+            issue: Some(display_issue_info),
             release: None,
         })));
     }
@@ -213,17 +264,23 @@ async fn resolve_number(
 async fn resolve_release_for_commit(
     git: &GitRepo,
     github: Option<&GitHubClient>,
+    repo_info: Option<&GhRepoInfo>,
     commit_hash: &str,
-    fallback_since: Option<&str>,
+    fallback_since: Option<chrono::DateTime<chrono::Utc>>,
+    pr_repo_info: Option<&GhRepoInfo>,
 ) -> Option<TagInfo> {
     let candidates = collect_tag_candidates(git, commit_hash);
-    let has_semver = candidates.iter().any(|candidate| candidate.info.is_semver);
+    let has_semver = candidates
+        .iter()
+        .any(|candidate| candidate.info.is_semver());
 
-    let targeted_releases = if let Some(gh) = github {
+    let targeted_releases = if let Some(gh) = github
+        && let Some(repo_info) = repo_info
+    {
         let target_names: Vec<_> = if has_semver {
             candidates
                 .iter()
-                .filter(|candidate| candidate.info.is_semver)
+                .filter(|candidate| candidate.info.is_semver())
                 .map(|candidate| candidate.info.name.clone())
                 .collect()
         } else {
@@ -235,7 +292,7 @@ async fn resolve_release_for_commit(
 
         let mut releases = Vec::new();
         for tag_name in target_names {
-            if let Some(release) = gh.fetch_release_by_tag(&tag_name).await {
+            if let Some(release) = gh.fetch_release_by_tag(repo_info, &tag_name).await {
                 releases.push(release);
             }
         }
@@ -246,26 +303,35 @@ async fn resolve_release_for_commit(
 
     // Skip GitHub API fallback if we have any local tags (not just semver).
     // This avoids expensive API calls and ancestry checks when we already have the answer locally.
-    let fallback_releases = if !candidates.is_empty() {
+    let mut fallback_releases = if !candidates.is_empty() {
         Vec::new()
-    } else if let (Some(gh), Some(since)) = (github, fallback_since) {
-        gh.fetch_releases_since(Some(since)).await
+    } else if let (Some(gh), Some(repo_info), Some(since)) = (github, repo_info, fallback_since) {
+        gh.fetch_releases_since(repo_info, since).await
     } else {
         Vec::new()
     };
 
+    // If nothing found in current repo and we have a PR repo, try fetching from there
+    if fallback_releases.is_empty()
+        && candidates.is_empty()
+        && let Some(gh) = github
+        && let Some(pr_repo) = pr_repo_info
+        && let Some(since) = fallback_since
+    {
+        fallback_releases = gh.fetch_releases_since(pr_repo, since).await;
+    }
+
     resolve_release_from_data(
         git,
+        github,
+        pr_repo_info,
         candidates,
-        &targeted_releases,
-        if fallback_releases.is_empty() {
-            None
-        } else {
-            Some(&fallback_releases)
-        },
+        targeted_releases,
+        fallback_releases,
         commit_hash,
         has_semver,
     )
+    .await
 }
 
 struct TagCandidate {
@@ -286,15 +352,18 @@ fn collect_tag_candidates(git: &GitRepo, commit_hash: &str) -> Vec<TagCandidate>
         .collect()
 }
 
-fn resolve_release_from_data(
+#[allow(clippy::too_many_arguments)]
+async fn resolve_release_from_data(
     git: &GitRepo,
+    github: Option<&GitHubClient>,
+    pr_repo_info: Option<&GhRepoInfo>,
     mut candidates: Vec<TagCandidate>,
-    targeted_releases: &[ReleaseInfo],
-    fallback_releases: Option<&[ReleaseInfo]>,
+    targeted_releases: Vec<ReleaseInfo>,
+    mut fallback_releases: Vec<ReleaseInfo>,
     commit_hash: &str,
     had_semver: bool,
 ) -> Option<TagInfo> {
-    apply_release_metadata(&mut candidates, targeted_releases);
+    apply_release_metadata(&mut candidates, targeted_releases.as_slice());
 
     let local_best = pick_best_tag(&candidates);
 
@@ -302,26 +371,60 @@ fn resolve_release_from_data(
         return local_best;
     }
 
-    let fallback_best = fallback_releases.and_then(|releases| {
-        let remote_candidates = releases
-            .iter()
-            .filter_map(|release| {
-                git.tag_from_release(release).and_then(|tag| {
-                    if git.tag_contains_commit(&tag.commit_hash, commit_hash) {
-                        let timestamp = git.get_commit_timestamp(&tag.commit_hash);
-                        Some(TagCandidate {
-                            info: tag,
-                            timestamp,
-                        })
-                    } else {
-                        None
+    let fallback_best = {
+        let mut remote_candidates = Vec::new();
+
+        // Sort fallback releases by published date ascending (so older releases are preferred)
+        fallback_releases.sort_by_key(|r| r.created_at.map_or(i64::MAX, |dt| dt.timestamp()));
+
+        for release in fallback_releases {
+            // Try to get tag from local git first
+            let tag_opt = git.tag_from_release(&release);
+
+            // If local tag exists, check if it contains the commit
+            if let Some(tag) = tag_opt {
+                if git.tag_contains_commit(&tag.commit_hash, commit_hash) {
+                    let timestamp = git.get_commit_timestamp(&tag.commit_hash);
+
+                    let is_semver = tag.is_semver();
+
+                    remote_candidates.push(TagCandidate {
+                        info: tag,
+                        timestamp,
+                    });
+
+                    if is_semver {
+                        // If we found a semver tag via API, it will always be preferred, so stop here
+                        break;
                     }
-                })
-            })
-            .collect::<Vec<_>>();
+                }
+            } else if let Some(gh) = github
+                && let Some(pr_repo) = pr_repo_info
+            {
+                // Fallback: tag doesn't exist locally, try GitHub API
+                if let Some(tag) = gh
+                    .fetch_tag_info_for_release(&release, pr_repo, commit_hash)
+                    .await
+                {
+                    let timestamp = tag.created_at.timestamp();
+
+                    let is_semver = tag.is_semver();
+
+                    remote_candidates.push(TagCandidate {
+                        info: tag,
+                        timestamp,
+                    });
+
+                    if is_semver {
+                        // If we found a semver tag via API, it will always be preferred, so stop here
+                        break;
+                    }
+                }
+            }
+        }
 
         pick_best_tag(&remote_candidates)
-    });
+    };
 
     fallback_best.or(local_best)
 }
@@ -337,7 +440,7 @@ fn apply_release_metadata(candidates: &mut [TagCandidate], releases: &[ReleaseIn
             candidate.info.is_release = true;
             candidate.info.release_name = release.name.clone();
             candidate.info.release_url = Some(release.url.clone());
-            candidate.info.published_at = release.published_at.clone();
+            candidate.info.published_at = release.published_at;
         }
     }
 }
@@ -354,10 +457,10 @@ fn pick_best_tag(candidates: &[TagCandidate]) -> Option<TagInfo> {
             .map(|candidate| candidate.info.clone())
     }
 
-    select_with_pred(candidates, |c| c.info.is_release && c.info.is_semver)
-        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && c.info.is_semver))
-        .or_else(|| select_with_pred(candidates, |c| c.info.is_release && !c.info.is_semver))
-        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && !c.info.is_semver))
+    select_with_pred(candidates, |c| c.info.is_release && c.info.is_semver())
+        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && c.info.is_semver()))
+        .or_else(|| select_with_pred(candidates, |c| c.info.is_release && !c.info.is_semver()))
+        .or_else(|| select_with_pred(candidates, |c| !c.info.is_release && !c.info.is_semver()))
 }
 
 /// Resolve a file path
@@ -365,14 +468,23 @@ async fn resolve_file(
     file_info: FileInfo,
     git: &GitRepo,
     github: Option<&GitHubClient>,
+    repo_info: Option<&GhRepoInfo>,
 ) -> IdentifiedThing {
-    let commit_date = file_info.last_commit.date_rfc3339();
-    let release =
-        resolve_release_for_commit(git, github, &file_info.last_commit.hash, Some(&commit_date))
-            .await;
+    let release = resolve_release_for_commit(
+        git,
+        github,
+        repo_info,
+        &file_info.last_commit.hash,
+        Some(file_info.last_commit.date),
+        None,
+    )
+    .await;
 
-    let (commit_url, author_urls) = if let Some(gh) = github {
-        let url = Some(gh.commit_url(&file_info.last_commit.hash));
+    let (commit_url, author_urls) = if let Some(repo_info) = repo_info {
+        let url = Some(GitHubClient::commit_url(
+            repo_info,
+            &file_info.last_commit.hash,
+        ));
         let urls: Vec<Option<String>> = file_info
             .previous_authors
             .iter()
@@ -393,31 +505,55 @@ async fn resolve_file(
     }))
 }
 
-/// Resolve commit and author URLs efficiently
-/// Returns (`commit_url`, `author_profile_url`)
+/// Resolve commit and author URLs efficiently & returns updated commit info
 async fn resolve_commit_urls(
     github: Option<&GitHubClient>,
-    email: &str,
-    commit_hash: &str,
-) -> (Option<String>, Option<String>) {
+    repo_info: Option<&GhRepoInfo>,
+    commit_info: CommitInfo,
+) -> CommitInfo {
+    // Check if already fetched
+    if commit_info.commit_url.is_some() && commit_info.author_url.is_some() {
+        return commit_info;
+    }
+
+    let commit_hash = commit_info.hash.as_str();
+
     // Try to extract username from email first (cheap, no API call)
-    if let Some(username) = extract_github_username(email) {
+    if let Some(email) = commit_info.author_email.as_deref()
+        && let Some(username) = extract_github_username(email)
+    {
         // We have the username from email, but still need commit URL
-        let commit_url = github.map(|gh| gh.commit_url(commit_hash));
-        return (commit_url, Some(GitHubClient::profile_url(&username)));
+        let commit_url = repo_info.map(|ri| GitHubClient::commit_url(ri, commit_hash));
+        return CommitInfo {
+            commit_url,
+            author_url: Some(GitHubClient::profile_url(&username)),
+            ..commit_info
+        };
     }
 
     // Try to fetch both URLs from GitHub API in one call
-    if let Some(gh) = github {
-        if let Some((_hash, commit_url, author_info)) = gh.fetch_commit_info(commit_hash).await {
-            let author_url = author_info.map(|(_login, url)| url);
-            return (Some(commit_url), author_url);
+    if let Some(gh) = github
+        && let Some(repo_info) = repo_info
+    {
+        if let Some(commit_info) = gh.fetch_commit_full_info(repo_info, commit_hash).await {
+            return commit_info;
         }
         // API call failed, fall back to manual URL building
-        return (Some(gh.commit_url(commit_hash)), None);
+        return CommitInfo {
+            commit_url: Some(GitHubClient::commit_url(repo_info, commit_hash)),
+            ..commit_info
+        };
     }
 
-    (None, None)
+    // Fallback: build commit URL only
+    if let Some(repo_info) = repo_info {
+        return CommitInfo {
+            commit_url: Some(GitHubClient::commit_url(repo_info, commit_hash)),
+            ..commit_info
+        };
+    }
+
+    commit_info
 }
 
 /// Try to extract GitHub username from email
