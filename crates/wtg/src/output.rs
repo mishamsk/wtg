@@ -194,7 +194,11 @@ fn display_commit_section(
     println!(
         "   {} {}",
         "📅".yellow(),
-        commit_info.date.as_str().dark_grey()
+        commit_info
+            .date
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+            .dark_grey()
     );
 
     if let Some(url) = commit_url {
@@ -469,9 +473,8 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
                 }
 
                 // Show published date if available
-                if let Some(published) = &tag.published_at
-                    && let Some(date_part) = published.split('T').next()
-                {
+                if let Some(published) = &tag.published_at {
+                    let date_part = published.format("%Y-%m-%d").to_string();
                     println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
                 }
 

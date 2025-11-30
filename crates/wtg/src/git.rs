@@ -1,7 +1,8 @@
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
 use crate::parse_url::parse_github_repo_url;
-use git2::{Commit, Oid, Repository, Time};
+use chrono::{DateTime, TimeZone, Utc};
+use git2::{Commit, Oid, Repository};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -23,18 +24,7 @@ pub struct CommitInfo {
     pub author_email: Option<String>,
     pub author_login: Option<String>,
     pub author_url: Option<String>,
-    pub date: String,
-    pub timestamp: i64, // Unix timestamp for the commit
-}
-
-impl CommitInfo {
-    /// Get the commit date as an RFC3339 string for GitHub API filtering
-    #[must_use]
-    pub fn date_rfc3339(&self) -> String {
-        use chrono::{DateTime, TimeZone, Utc};
-        let datetime: DateTime<Utc> = Utc.timestamp_opt(self.timestamp, 0).unwrap();
-        datetime.to_rfc3339()
-    }
+    pub date: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,10 +39,10 @@ pub struct TagInfo {
     pub name: String,
     pub commit_hash: String,
     pub semver_info: Option<SemverInfo>,
-    pub is_release: bool,             // Whether this is a GitHub release
-    pub release_name: Option<String>, // GitHub release name (if is_release)
-    pub release_url: Option<String>,  // GitHub release URL (if is_release)
-    pub published_at: Option<String>, // GitHub release published date (if is_release)
+    pub is_release: bool,                    // Whether this is a GitHub release
+    pub release_name: Option<String>,        // GitHub release name (if is_release)
+    pub release_url: Option<String>,         // GitHub release URL (if is_release)
+    pub published_at: Option<DateTime<Utc>>, // GitHub release published date (if is_release)
 }
 
 impl TagInfo {
@@ -246,7 +236,7 @@ impl GitRepo {
                                     true,
                                     release.name.clone(),
                                     Some(release.url.clone()),
-                                    release.published_at.clone(),
+                                    release.published_at,
                                 )
                             });
 
@@ -293,7 +283,7 @@ impl GitRepo {
                 is_release: true,
                 release_name: release.name.clone(),
                 release_url: Some(release.url.clone()),
-                published_at: release.published_at.clone(),
+                published_at: release.published_at,
             })
         })
     }
@@ -424,8 +414,7 @@ impl GitRepo {
             author_email: commit.author().email().map(str::to_string),
             author_login: None,
             author_url: None,
-            date: format_git_time(&time),
-            timestamp: time.seconds(),
+            date: Utc.timestamp_opt(time.seconds(), 0).unwrap(),
         }
     }
 }
@@ -529,14 +518,6 @@ pub fn parse_semver(tag: &str) -> Option<SemverInfo> {
         pre_release,
         build_metadata,
     })
-}
-
-/// Format git time to a human-readable string
-fn format_git_time(time: &Time) -> String {
-    use chrono::{DateTime, TimeZone, Utc};
-
-    let datetime: DateTime<Utc> = Utc.timestamp_opt(time.seconds(), 0).unwrap();
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 #[cfg(test)]

@@ -1,3 +1,5 @@
+use chrono::Utc;
+
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo, ReleaseInfo};
@@ -130,13 +132,12 @@ async fn resolve_commit(
 ) -> IdentifiedThing {
     let commit_info = resolve_commit_urls(github, repo_info, commit_info).await;
 
-    let commit_date = commit_info.date_rfc3339();
     let release = resolve_release_for_commit(
         git,
         github,
         repo_info,
         &commit_info.hash,
-        Some(&commit_date),
+        Some(&commit_info.date),
         None,
     )
     .await;
@@ -167,13 +168,12 @@ async fn resolve_number(
         {
             let commit_info = resolve_commit_urls(Some(gh), Some(repo_info), commit_info).await;
 
-            let commit_date = commit_info.date_rfc3339();
             let release = resolve_release_for_commit(
                 git,
                 Some(gh),
                 Some(repo_info),
                 merge_sha,
-                Some(&commit_date),
+                Some(&commit_info.date),
                 None,
             )
             .await;
@@ -216,8 +216,6 @@ async fn resolve_number(
                     let commit_info =
                         resolve_commit_urls(Some(gh), Some(repo_info), commit_info).await;
 
-                    let commit_date = commit_info.date_rfc3339();
-
                     // For cross-project PRs, pass the PR's repo info for release fallback
                     let pr_repo_info = pr_info.repo_info.as_ref().filter(|pr_repo_info| {
                         pr_repo_info.owner() != repo_info.owner()
@@ -229,7 +227,7 @@ async fn resolve_number(
                         Some(gh),
                         Some(repo_info),
                         merge_sha,
-                        Some(&commit_date),
+                        Some(&commit_info.date),
                         pr_repo_info,
                     )
                     .await;
@@ -270,7 +268,7 @@ async fn resolve_release_for_commit(
     github: Option<&GitHubClient>,
     repo_info: Option<&GhRepoInfo>,
     commit_hash: &str,
-    fallback_since: Option<&str>,
+    fallback_since: Option<&chrono::DateTime<chrono::Utc>>,
     pr_repo_info: Option<&GhRepoInfo>,
 ) -> Option<TagInfo> {
     let candidates = collect_tag_candidates(git, commit_hash);
@@ -403,9 +401,14 @@ async fn resolve_release_from_data(
                     .fetch_tag_info_for_release(release, pr_repo, commit_hash)
                     .await
                 {
+                    let timestamp = tag
+                        .published_at
+                        .or(release.published_at)
+                        .map_or_else(|| Utc::now().timestamp(), |dt| dt.timestamp());
+
                     remote_candidates.push(TagCandidate {
                         info: tag,
-                        timestamp: 1, // TODO: refactor to store timestamps on releases
+                        timestamp,
                     });
                 }
             }
@@ -430,7 +433,7 @@ fn apply_release_metadata(candidates: &mut [TagCandidate], releases: &[ReleaseIn
             candidate.info.is_release = true;
             candidate.info.release_name = release.name.clone();
             candidate.info.release_url = Some(release.url.clone());
-            candidate.info.published_at = release.published_at.clone();
+            candidate.info.published_at = release.published_at;
         }
     }
 }
@@ -460,13 +463,12 @@ async fn resolve_file(
     github: Option<&GitHubClient>,
     repo_info: Option<&GhRepoInfo>,
 ) -> IdentifiedThing {
-    let commit_date = file_info.last_commit.date_rfc3339();
     let release = resolve_release_for_commit(
         git,
         github,
         repo_info,
         &file_info.last_commit.hash,
-        Some(&commit_date),
+        Some(&file_info.last_commit.date),
         None,
     )
     .await;

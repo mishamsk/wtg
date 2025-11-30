@@ -35,19 +35,13 @@ impl From<RepoCommit> for CommitInfo {
             .map(|author| (Some(author.login), Some(author.html_url.into())))
             .unwrap_or_default();
 
-        let (date, timestamp) = commit
+        let date = commit
             .commit
             .author
             .as_ref()
             .and_then(|a| a.date.as_ref())
-            .map_or_else(
-                || (String::new(), 0),
-                |date_time| {
-                    let date = date_time.format("%Y-%m-%d %H:%M:%S").to_string();
-                    let timestamp = date_time.timestamp();
-                    (date, timestamp)
-                },
-            );
+            .copied()
+            .unwrap_or_else(Utc::now);
 
         let full_hash = commit.sha;
 
@@ -62,7 +56,6 @@ impl From<RepoCommit> for CommitInfo {
             author_login,
             author_url,
             date,
-            timestamp,
         }
     }
 }
@@ -130,14 +123,14 @@ pub struct PullRequestInfo {
     pub merge_commit_sha: Option<String>,
     pub author: Option<String>,
     pub author_url: Option<String>,
-    pub created_at: Option<String>, // When the PR was created
+    pub created_at: Option<DateTime<Utc>>, // When the PR was created
 }
 
 impl From<octocrab::models::pulls::PullRequest> for PullRequestInfo {
     fn from(pr: octocrab::models::pulls::PullRequest) -> Self {
         let author = pr.user.as_ref().map(|u| u.login.clone());
         let author_url = pr.user.as_ref().map(|u| u.html_url.to_string());
-        let created_at = pr.created_at.map(|dt| dt.to_string());
+        let created_at = pr.created_at;
 
         Self {
             number: pr.number,
@@ -201,7 +194,7 @@ pub struct ReleaseInfo {
     pub tag_name: String,
     pub name: Option<String>,
     pub url: String,
-    pub published_at: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
     pub prerelease: bool,
 }
 
@@ -472,18 +465,13 @@ impl GitHubClient {
     pub async fn fetch_releases_since(
         &self,
         repo_info: &GhRepoInfo,
-        since_date: Option<&str>,
+        since_date: Option<&DateTime<Utc>>,
     ) -> Vec<ReleaseInfo> {
         let mut releases = Vec::new();
         let mut page_num = 1u32;
         let per_page = 100u8; // Max allowed by GitHub API
 
-        // Parse the cutoff date if provided
-        let cutoff_timestamp = since_date.and_then(|date_str| {
-            chrono::DateTime::parse_from_rfc3339(date_str)
-                .ok()
-                .map(|dt| dt.timestamp())
-        });
+        let cutoff_timestamp = since_date.map(chrono::DateTime::timestamp);
 
         // Try to get first page with auth client, fallback to anonymous
         let Ok((mut current_page, client)) = self
@@ -513,8 +501,6 @@ impl GitHubClient {
             let mut should_stop = false;
 
             for release in current_page.items {
-                let published_at_str = release.published_at.map(|dt| dt.to_string());
-
                 // Check if this release is too old
                 if let Some(cutoff) = cutoff_timestamp
                     && let Some(pub_at) = &release.published_at
@@ -528,7 +514,7 @@ impl GitHubClient {
                     tag_name: release.tag_name,
                     name: release.name,
                     url: release.html_url.to_string(),
-                    published_at: published_at_str,
+                    published_at: release.published_at,
                     prerelease: release.prerelease,
                 });
             }
@@ -585,7 +571,7 @@ impl GitHubClient {
             tag_name: release.tag_name,
             name: release.name,
             url: release.html_url.to_string(),
-            published_at: release.published_at.map(|dt| dt.to_string()),
+            published_at: release.published_at,
             prerelease: release.prerelease,
         })
     }
@@ -635,7 +621,7 @@ impl GitHubClient {
             is_release: true,
             release_name: release.name.clone(),
             release_url: Some(release.url.clone()),
-            published_at: release.published_at.clone(),
+            published_at: release.published_at,
         })
     }
 
