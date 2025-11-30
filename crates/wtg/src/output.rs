@@ -472,11 +472,11 @@ fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option
                     println!("   {} {}", "🎉".yellow(), tag.name.as_str().cyan().bold());
                 }
 
-                // Show published date if available
-                if let Some(published) = &tag.published_at {
-                    let date_part = published.format("%Y-%m-%d").to_string();
-                    println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
-                }
+                // Show published date if available, fallback to tag date
+                let published_or_created = tag.published_at.unwrap_or(tag.created_at);
+
+                let date_part = published_or_created.format("%Y-%m-%d").to_string();
+                println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
 
                 // Use the release URL if available
                 if let Some(url) = &tag.release_url {

@@ -1,5 +1,3 @@
-use chrono::Utc;
-
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo, ReleaseInfo};
@@ -137,7 +135,7 @@ async fn resolve_commit(
         github,
         repo_info,
         &commit_info.hash,
-        Some(&commit_info.date),
+        Some(commit_info.date),
         None,
     )
     .await;
@@ -173,7 +171,7 @@ async fn resolve_number(
                 Some(gh),
                 Some(repo_info),
                 merge_sha,
-                Some(&commit_info.date),
+                Some(commit_info.date),
                 None,
             )
             .await;
@@ -227,7 +225,7 @@ async fn resolve_number(
                         Some(gh),
                         Some(repo_info),
                         merge_sha,
-                        Some(&commit_info.date),
+                        Some(commit_info.date),
                         pr_repo_info,
                     )
                     .await;
@@ -268,7 +266,7 @@ async fn resolve_release_for_commit(
     github: Option<&GitHubClient>,
     repo_info: Option<&GhRepoInfo>,
     commit_hash: &str,
-    fallback_since: Option<&chrono::DateTime<chrono::Utc>>,
+    fallback_since: Option<chrono::DateTime<chrono::Utc>>,
     pr_repo_info: Option<&GhRepoInfo>,
 ) -> Option<TagInfo> {
     let candidates = collect_tag_candidates(git, commit_hash);
@@ -308,7 +306,7 @@ async fn resolve_release_for_commit(
     let mut fallback_releases = if !candidates.is_empty() {
         Vec::new()
     } else if let (Some(gh), Some(repo_info), Some(since)) = (github, repo_info, fallback_since) {
-        gh.fetch_releases_since(repo_info, Some(since)).await
+        gh.fetch_releases_since(repo_info, since).await
     } else {
         Vec::new()
     };
@@ -320,7 +318,7 @@ async fn resolve_release_for_commit(
         && let Some(pr_repo) = pr_repo_info
         && let Some(since) = fallback_since
     {
-        fallback_releases = gh.fetch_releases_since(pr_repo, Some(since)).await;
+        fallback_releases = gh.fetch_releases_since(pr_repo, since).await;
     }
 
     resolve_release_from_data(
@@ -328,12 +326,8 @@ async fn resolve_release_for_commit(
         github,
         pr_repo_info,
         candidates,
-        &targeted_releases,
-        if fallback_releases.is_empty() {
-            None
-        } else {
-            Some(&fallback_releases)
-        },
+        targeted_releases,
+        fallback_releases,
         commit_hash,
         has_semver,
     )
@@ -364,12 +358,12 @@ async fn resolve_release_from_data(
     github: Option<&GitHubClient>,
     pr_repo_info: Option<&GhRepoInfo>,
     mut candidates: Vec<TagCandidate>,
-    targeted_releases: &[ReleaseInfo],
-    fallback_releases: Option<&[ReleaseInfo]>,
+    targeted_releases: Vec<ReleaseInfo>,
+    mut fallback_releases: Vec<ReleaseInfo>,
     commit_hash: &str,
     had_semver: bool,
 ) -> Option<TagInfo> {
-    apply_release_metadata(&mut candidates, targeted_releases);
+    apply_release_metadata(&mut candidates, targeted_releases.as_slice());
 
     let local_best = pick_best_tag(&candidates);
 
@@ -377,46 +371,59 @@ async fn resolve_release_from_data(
         return local_best;
     }
 
-    let fallback_best = if let Some(releases) = fallback_releases {
+    let fallback_best = {
         let mut remote_candidates = Vec::new();
 
-        for release in releases {
+        // Sort fallback releases by published date ascending (so older releases are preferred)
+        fallback_releases.sort_by_key(|r| r.created_at.map_or(i64::MAX, |dt| dt.timestamp()));
+
+        for release in fallback_releases {
             // Try to get tag from local git first
-            let tag_opt = git.tag_from_release(release);
+            let tag_opt = git.tag_from_release(&release);
 
             // If local tag exists, check if it contains the commit
             if let Some(tag) = tag_opt {
                 if git.tag_contains_commit(&tag.commit_hash, commit_hash) {
                     let timestamp = git.get_commit_timestamp(&tag.commit_hash);
+
+                    let is_semver = tag.is_semver();
+
                     remote_candidates.push(TagCandidate {
                         info: tag,
                         timestamp,
                     });
+
+                    if is_semver {
+                        // If we found a semver tag via API, it will always be preferred, so stop here
+                        break;
+                    }
                 }
             } else if let Some(gh) = github
                 && let Some(pr_repo) = pr_repo_info
             {
                 // Fallback: tag doesn't exist locally, try GitHub API
                 if let Some(tag) = gh
-                    .fetch_tag_info_for_release(release, pr_repo, commit_hash)
+                    .fetch_tag_info_for_release(&release, pr_repo, commit_hash)
                     .await
                 {
-                    let timestamp = tag
-                        .published_at
-                        .or(release.published_at)
-                        .map_or_else(|| Utc::now().timestamp(), |dt| dt.timestamp());
+                    let timestamp = tag.created_at.timestamp();
+
+                    let is_semver = tag.is_semver();
 
                     remote_candidates.push(TagCandidate {
                         info: tag,
                         timestamp,
                     });
+
+                    if is_semver {
+                        // If we found a semver tag via API, it will always be preferred, so stop here
+                        break;
+                    }
                 }
             }
         }
 
         pick_best_tag(&remote_candidates)
-    } else {
-        None
     };
 
     fallback_best.or(local_best)
@@ -468,7 +475,7 @@ async fn resolve_file(
         github,
         repo_info,
         &file_info.last_commit.hash,
-        Some(&file_info.last_commit.date),
+        Some(file_info.last_commit.date),
         None,
     )
     .await;

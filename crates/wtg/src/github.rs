@@ -195,6 +195,7 @@ pub struct ReleaseInfo {
     pub name: Option<String>,
     pub url: String,
     pub published_at: Option<DateTime<Utc>>,
+    pub created_at: Option<DateTime<Utc>>,
     pub prerelease: bool,
 }
 
@@ -465,13 +466,11 @@ impl GitHubClient {
     pub async fn fetch_releases_since(
         &self,
         repo_info: &GhRepoInfo,
-        since_date: Option<&DateTime<Utc>>,
+        since_date: DateTime<Utc>,
     ) -> Vec<ReleaseInfo> {
         let mut releases = Vec::new();
         let mut page_num = 1u32;
         let per_page = 100u8; // Max allowed by GitHub API
-
-        let cutoff_timestamp = since_date.map(chrono::DateTime::timestamp);
 
         // Try to get first page with auth client, fallback to anonymous
         let Ok((mut current_page, client)) = self
@@ -493,21 +492,22 @@ impl GitHubClient {
             return releases;
         };
 
-        loop {
+        'pagintaion: loop {
             if current_page.items.is_empty() {
                 break; // No more pages
             }
 
-            let mut should_stop = false;
+            // Sort releases by created_at descending
+            current_page
+                .items
+                .sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
             for release in current_page.items {
                 // Check if this release is too old
-                if let Some(cutoff) = cutoff_timestamp
-                    && let Some(pub_at) = &release.published_at
-                    && pub_at.timestamp() < cutoff
-                {
-                    should_stop = true;
-                    break; // Stop processing this page
+                let release_tag_created_at = release.created_at.unwrap_or_default();
+
+                if release_tag_created_at < since_date {
+                    break 'pagintaion; // Stop processing
                 }
 
                 releases.push(ReleaseInfo {
@@ -515,12 +515,13 @@ impl GitHubClient {
                     name: release.name,
                     url: release.html_url.to_string(),
                     published_at: release.published_at,
+                    created_at: release.created_at,
                     prerelease: release.prerelease,
                 });
             }
 
-            if should_stop {
-                break; // Stop pagination
+            if current_page.next.is_none() {
+                break; // No more pages
             }
 
             page_num += 1;
@@ -572,6 +573,7 @@ impl GitHubClient {
             name: release.name,
             url: release.html_url.to_string(),
             published_at: release.published_at,
+            created_at: release.created_at,
             prerelease: release.prerelease,
         })
     }
@@ -618,6 +620,7 @@ impl GitHubClient {
             name: release.tag_name.clone(),
             commit_hash: compare.base_commit.sha,
             semver_info,
+            created_at: release.created_at?,
             is_release: true,
             release_name: release.name.clone(),
             release_url: Some(release.url.clone()),

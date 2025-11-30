@@ -39,9 +39,10 @@ pub struct TagInfo {
     pub name: String,
     pub commit_hash: String,
     pub semver_info: Option<SemverInfo>,
-    pub is_release: bool,                    // Whether this is a GitHub release
-    pub release_name: Option<String>,        // GitHub release name (if is_release)
-    pub release_url: Option<String>,         // GitHub release URL (if is_release)
+    pub created_at: DateTime<Utc>, // Timestamp of the commit the tag points to
+    pub is_release: bool,          // Whether this is a GitHub release
+    pub release_name: Option<String>, // GitHub release name (if is_release)
+    pub release_url: Option<String>, // GitHub release URL (if is_release)
     pub published_at: Option<DateTime<Utc>>, // GitHub release published date (if is_release)
 }
 
@@ -244,6 +245,7 @@ impl GitRepo {
                             name: tag_name.to_string(),
                             commit_hash: commit.id().to_string(),
                             semver_info,
+                            created_at: git_time_to_datetime(commit.time()),
                             is_release,
                             release_name,
                             release_url,
@@ -284,6 +286,7 @@ impl GitRepo {
                 release_name: release.name.clone(),
                 release_url: Some(release.url.clone()),
                 published_at: release.published_at,
+                created_at: git_time_to_datetime(commit.time()),
             })
         })
     }
@@ -336,6 +339,7 @@ impl GitRepo {
                             name: tag_name.to_string(),
                             commit_hash: tag_oid.to_string(),
                             semver_info,
+                            created_at: git_time_to_datetime(commit.time()),
                             is_release: false,
                             release_name: None,
                             release_url: None,
@@ -518,6 +522,12 @@ pub fn parse_semver(tag: &str) -> Option<SemverInfo> {
         pre_release,
         build_metadata,
     })
+}
+
+/// Convert `git2::Time` to `chrono::DateTime<Utc>`
+#[must_use]
+pub fn git_time_to_datetime(time: git2::Time) -> DateTime<Utc> {
+    Utc.timestamp_opt(time.seconds(), 0).unwrap()
 }
 
 #[cfg(test)]
