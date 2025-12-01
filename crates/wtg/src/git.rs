@@ -379,11 +379,12 @@ impl GitRepo {
     #[must_use]
     pub fn github_remote(&self) -> Option<GhRepoInfo> {
         self.with_repo(|repo| {
-            for remote_name in ["origin", "upstream"] {
+            for remote_name in ["upstream", "origin"] {
                 if let Ok(remote) = repo.find_remote(remote_name)
                     && let Some(url) = remote.url()
+                    && let Some(repo_info) = parse_github_repo_url(url)
                 {
-                    return parse_github_repo_url(url);
+                    return Some(repo_info);
                 }
             }
 
@@ -391,8 +392,9 @@ impl GitRepo {
                 for remote_name in remotes.iter().flatten() {
                     if let Ok(remote) = repo.find_remote(remote_name)
                         && let Some(url) = remote.url()
+                        && let Some(repo_info) = parse_github_repo_url(url)
                     {
-                        return parse_github_repo_url(url);
+                        return Some(repo_info);
                     }
                 }
             }
