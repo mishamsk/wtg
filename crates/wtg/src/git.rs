@@ -1,6 +1,6 @@
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
-use crate::parse_url::parse_github_repo_url;
+use crate::parse_input::parse_github_repo_url;
 use chrono::{DateTime, TimeZone, Utc};
 use git2::{Commit, Oid, Repository};
 use regex::Regex;

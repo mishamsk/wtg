@@ -12,7 +12,7 @@ use std::{future::Future, pin::Pin, sync::LazyLock, time::Duration};
 use crate::{
     error::{WtgError, WtgResult},
     git::{CommitInfo, TagInfo, parse_semver},
-    parse_url::parse_github_repo_url,
+    parse_input::parse_github_repo_url,
 };
 
 impl From<RepoCommit> for CommitInfo {

@@ -2,7 +2,7 @@ use clap::Parser;
 
 use crate::{
     constants,
-    parse_url::{ParsedInput, parse_github_repo_url, parse_github_url, sanitize_query},
+    parse_input::{ParsedInput, try_parse_input},
 };
 
 #[derive(Parser, Debug)]
@@ -29,45 +29,9 @@ pub struct Cli {
 impl Cli {
     /// Parse the input and -r flag to determine the repository and query
     #[must_use]
-    pub fn parse_input(&self) -> Option<ParsedInput> {
+    pub(crate) fn parse_input(&self) -> Option<ParsedInput> {
         let input = self.input.as_ref()?;
 
-        // If -r flag is provided, use it as the repo and input as the query
-        if let Some(repo_url) = &self.repo {
-            let repo_info = parse_github_repo_url(repo_url)?;
-            let query = sanitize_query(input)?;
-            return Some(ParsedInput::new_with_remote(repo_info, query));
-        }
-
-        // Try to parse input as a GitHub URL
-        if let Some(parsed) = parse_github_url(input) {
-            return Some(parsed);
-        }
-
-        // Otherwise, it's just a query (local repo)
-        sanitize_query(input).map(ParsedInput::new_local_query)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Cli;
-
-    #[test]
-    fn sanitizes_plain_query_inputs() {
-        let cli = Cli {
-            input: Some("   \n".into()),
-            repo: Some("owner/repo".into()),
-            help: None,
-        };
-        assert!(cli.parse_input().is_none());
-
-        let cli = Cli {
-            input: Some("  #99  ".into()),
-            repo: Some("owner/repo".into()),
-            help: None,
-        };
-        let parsed = cli.parse_input().unwrap();
-        assert_eq!(parsed.query(), "#99");
+        try_parse_input(input, self.repo.as_deref())
     }
 }

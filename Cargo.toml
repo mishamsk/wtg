@@ -28,6 +28,9 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
+# Disable some strange nursery lints
+redundant_pub_crate = "allow"
+
 [workspace.dependencies]
 # Own crates
 wtg-cli = { path = "crates/wtg" }

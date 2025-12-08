@@ -8,7 +8,7 @@ pub mod github;
 pub mod help;
 pub mod identifier;
 pub mod output;
-pub mod parse_url;
+pub(crate) mod parse_input;
 pub mod remote;
 pub mod repo_manager;
 
@@ -88,7 +88,11 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     }
 
     // Detect what type of input we have
-    let result = Box::pin(identifier::identify(parsed_input.query(), git_repo)).await?;
+    let result = Box::pin(identifier::identify(
+        parsed_input.query_as_string().as_str(),
+        git_repo,
+    ))
+    .await?;
 
     // Display the result
     output::display(result)?;
