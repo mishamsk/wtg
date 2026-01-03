@@ -61,10 +61,7 @@ fn run_with_cli(cli: Cli) -> WtgResult<()> {
 
 async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
-    let parsed_input = cli.parse_input().ok_or_else(|| WtgError::Cli {
-        message: "Invalid input".to_string(),
-        code: 1,
-    })?;
+    let parsed_input = cli.parse_input()?;
 
     // Create the appropriate repo manager
     let repo_manager = if let Some(gh_repo_info) = parsed_input.gh_repo_info() {

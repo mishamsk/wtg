@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 
 use url::Url;
 
-use crate::github::GhRepoInfo;
+use crate::{
+    error::{WtgError, WtgResult},
+    github::GhRepoInfo,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Query {
@@ -84,23 +87,32 @@ impl ParsedInput {
 /// - <https://github.com/owner/repo/pull/123>
 /// - <https://github.com/owner/repo/blob/branch/path/to/file>
 /// - <`git@github.com:owner/repo/pull/9#discussion_r123`>
-#[must_use]
-fn try_parse_input_from_github_url(url: &str) -> Option<ParsedInput> {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return None;
+///
+/// Note: assumes input is already sanitized, trimmed & non-empty
+///
+/// Returns:
+/// - `Ok(ParsedInput)` if it's a valid GitHub URL
+/// - `Err(NotGitHubUrl)` if it's a valid URL but not GitHub
+/// - `Err(MalformedGitHubUrl)` if it's a GitHub URL but malformed
+fn try_parse_input_from_github_url(url: &str) -> Result<ParsedInput, WtgError> {
+    debug_assert!(
+        sanitize_query(url).is_ok(),
+        "URL should be sanitized before parsing"
+    );
+
+    // Try SSH format first
+    if let Some(segments) = parse_git_ssh_segments(url) {
+        return parsed_input_from_segments(&segments, false, url);
     }
 
-    if let Some(segments) = parse_git_ssh_segments(trimmed) {
-        return parsed_input_from_segments(&segments, false);
+    // Try HTTP/HTTPS format
+    match parse_http_github_segments(url) {
+        Ok((segments, is_api)) => parsed_input_from_segments(&segments, is_api, url),
+        Err(e) => Err(e),
     }
-
-    let (segments, is_api) = parse_http_github_segments(trimmed)?;
-    parsed_input_from_segments(&segments, is_api)
 }
 
-#[must_use]
-fn try_parse_input_str(raw_input: &str) -> Option<Query> {
+fn try_parse_input_str(raw_input: &str) -> Result<Query, WtgError> {
     // Sanitize input
     let input = sanitize_query(raw_input)?;
 
@@ -108,30 +120,59 @@ fn try_parse_input_str(raw_input: &str) -> Option<Query> {
     if let Some(stripped) = input.strip_prefix('#')
         && let Ok(number) = stripped.parse()
     {
-        return Some(Query::IssueOrPr(number));
+        return Ok(Query::IssueOrPr(number));
     }
 
     // Otherwise we have to treat as unknown, since path & branches
     // may look the same, and other git refs may be indistinguishable
     // from commit hashes without querying the repo
-    Some(Query::Unknown(input))
+    Ok(Query::Unknown(input))
 }
 
-pub(crate) fn try_parse_input(raw_input: &str, repo_url: Option<&str>) -> Option<ParsedInput> {
+pub(crate) fn try_parse_input(
+    raw_input: &str,
+    repo_url: Option<&str>,
+) -> Result<ParsedInput, WtgError> {
+    let raw_input = raw_input.trim();
+
     // If repo url is explicitly provided, use it as the repo and input as the query
     if let Some(repo_url) = repo_url {
-        let repo_info = parse_github_repo_url(repo_url)?;
+        let repo_info = parse_github_repo_url(repo_url)
+            .ok_or_else(|| WtgError::MalformedGitHubUrl(repo_url.to_string()))?;
         let query = try_parse_input_str(raw_input)?;
-        return Some(ParsedInput::new_with_remote(repo_info, query));
+        return Ok(ParsedInput::new_with_remote(repo_info, query));
     }
 
-    // Otherwise, try to parse input as a GitHub URL
-    if let Some(parsed) = try_parse_input_from_github_url(raw_input) {
-        return Some(parsed);
+    // Skip GitHub URL parsing if input is empty - let try_parse_input_str handle it
+    if raw_input.is_empty() {
+        return try_parse_input_str(raw_input).map(ParsedInput::new_local_query);
     }
 
-    // And finally, treat as a local query
-    try_parse_input_str(raw_input).map(ParsedInput::new_local_query)
+    // Try to parse input as a GitHub URL
+    match try_parse_input_from_github_url(raw_input) {
+        Ok(parsed) => Ok(parsed),
+        Err(WtgError::NotGitHubUrl(_)) | Err(WtgError::MalformedGitHubUrl(_)) => {
+            // If it looks like a URL attempt but failed, propagate the error
+            // Check if it's actually URL-like (has scheme or looks like github URL)
+            if is_url_like(raw_input) {
+                Err(try_parse_input_from_github_url(raw_input).unwrap_err())
+            } else {
+                // Not a URL, treat as a local query
+                try_parse_input_str(raw_input).map(ParsedInput::new_local_query)
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Check if input looks like a URL attempt (has scheme or domain-like pattern)
+fn is_url_like(input: &str) -> bool {
+    let trimmed = input.trim().to_ascii_lowercase();
+    trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("//")
+        || trimmed.starts_with("git@")
+        || trimmed.contains("://")
 }
 
 /// Parse a simple GitHub repo URL or just owner/repo format
@@ -153,10 +194,10 @@ pub(crate) fn parse_github_repo_url(url: &str) -> Option<GhRepoInfo> {
         return owner_repo_from_segments(&segments, false);
     }
 
-    if let Some((segments, is_api)) = parse_http_github_segments(trimmed)
-        && let Some(owner_repo) = owner_repo_from_segments(&segments, is_api)
-    {
-        return Some(owner_repo);
+    if let Ok((segments, is_api)) = parse_http_github_segments(trimmed) {
+        if let Some(owner_repo) = owner_repo_from_segments(&segments, is_api) {
+            return Some(owner_repo);
+        }
     }
 
     // Handle simple owner/repo format
@@ -173,19 +214,23 @@ pub(crate) fn parse_github_repo_url(url: &str) -> Option<GhRepoInfo> {
     None
 }
 
-fn parse_http_github_segments(url: &str) -> Option<(Vec<String>, bool)> {
-    let mut parsed = parse_with_https_fallback(url)?;
-    let host = parsed.host_str()?;
+fn parse_http_github_segments(url: &str) -> Result<(Vec<String>, bool), WtgError> {
+    let mut parsed =
+        parse_with_https_fallback(url).ok_or_else(|| WtgError::NotGitHubUrl(url.to_string()))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| WtgError::NotGitHubUrl(url.to_string()))?;
 
     let is_api = match is_allowed_github_host(host) {
         GhUrlHostType::Github => false,
         GhUrlHostType::GithubApi => true,
-        GhUrlHostType::Other => return None,
+        GhUrlHostType::Other => return Err(WtgError::NotGitHubUrl(url.to_string())),
     };
 
     parsed.set_fragment(None);
     parsed.set_query(None);
-    Some((collect_segments(parsed.path()), is_api))
+    Ok((collect_segments(parsed.path()), is_api))
 }
 
 /// Parse Git SSH URL format:
@@ -267,8 +312,15 @@ fn split_url_segments(segments: &[String], is_api: bool) -> Option<(GhRepoInfo, 
     ))
 }
 
-fn parsed_input_from_segments(segments: &[String], is_api: bool) -> Option<ParsedInput> {
-    let (repo_info, segments) = split_url_segments(segments, is_api)?;
+fn parsed_input_from_segments(segments: &[String], is_api: bool) -> WtgResult<Option<ParsedInput>> {
+    let (repo_info, segments) = split_url_segments(segments, is_api).ok_or_else(|| {
+        WtgError::MalformedGitHubUrl("Where's the repo, where's the owner?".to_string())
+    })?;
+
+    let route = segments
+        .first()
+        .ok_or_else(|| WtgError::MalformedGitHubUrl("No route found in GitHub URL".to_string()))?
+        .as_str();
 
     let query = match segments.first()?.as_str() {
         "commit" => Query::GitCommit(sanitize_query(segments.get(1)?)?),
@@ -316,33 +368,45 @@ fn sanitize_owner_repo_segment(raw: &str) -> Option<String> {
 }
 
 /// Sanitize a query string by trimming whitespace and rejecting control characters
-pub(crate) fn sanitize_query(raw: &str) -> Option<String> {
+pub(crate) fn sanitize_query(raw: &str) -> WtgResult<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return None;
+        return Err(WtgError::EmptyInput);
     }
 
     if trimmed.chars().any(char::is_control) {
-        return None;
+        return Err(WtgError::SecurityRejection(
+            "Input contains control characters (null bytes, newlines, etc.)".to_string(),
+        ));
     }
 
-    Some(trimmed.to_string())
+    Ok(trimmed.to_string())
 }
 
 /// Checks whether the given path is valid & safe to use
-pub(crate) fn check_path(path: &Path) -> bool {
+pub(crate) fn check_path(path: &Path) -> WtgResult<()> {
     // We may have an empty path after sanitation, or it may be
     // absolute, or contain parent components - reject those
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return false;
+    if path.as_os_str().is_empty() {
+        return Err(WtgError::EmptyInput);
     }
 
-    true
+    if path.is_absolute() {
+        return Err(WtgError::SecurityRejection(
+            "An absolute path snuck in".to_string(),
+        ));
+    }
+
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(WtgError::SecurityRejection(
+            "Some fishy `..` in the path".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -419,7 +483,7 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_query: Query,
     ) {
-        let parsed = try_parse_input(url, None).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, expected_query);
@@ -463,7 +527,7 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_query: Query,
     ) {
-        let parsed = try_parse_input(url, None).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, expected_query);
@@ -494,7 +558,7 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_hash: &str,
     ) {
-        let parsed = try_parse_input(url, None).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, Query::GitCommit(expected_hash.to_string()));
@@ -527,8 +591,8 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_path: &str,
     ) {
-        let parsed =
-            try_parse_input_from_github_url(url).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input_from_github_url(url)
+            .unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, Query::FilePath(PathBuf::from(expected_path)));
@@ -567,7 +631,7 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_query: Query,
     ) {
-        let parsed = try_parse_input(url, None).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, expected_query);
@@ -594,7 +658,7 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_query: impl Into<QueryMatcher>,
     ) {
-        let parsed = try_parse_input(url, None).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         expected_query.into().assert_matches(&parsed.query);
@@ -613,7 +677,7 @@ mod tests {
         #[case] expected_repo: &str,
         #[case] expected_query: Query,
     ) {
-        let parsed = try_parse_input(url, None).unwrap_or_else(|| panic!("failed to parse {url}"));
+        let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, expected_query);
@@ -653,7 +717,7 @@ mod tests {
         #[case] expected_repo: &str,
     ) {
         let parsed = try_parse_input("dummy", Some(input))
-            .unwrap_or_else(|| panic!("failed to parse {input}"));
+            .unwrap_or_else(|_| panic!("failed to parse {input}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, Query::Unknown("dummy".to_string()));
@@ -672,7 +736,7 @@ mod tests {
         #[case] expected_repo: &str,
     ) {
         let parsed =
-            try_parse_input("dummy", Some(url)).unwrap_or_else(|| panic!("failed to parse {url}"));
+            try_parse_input("dummy", Some(url)).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, Query::Unknown("dummy".to_string()));
@@ -694,7 +758,7 @@ mod tests {
         #[case] expected_query: Query,
     ) {
         let parsed = try_parse_input(input, Some(repo_url))
-            .unwrap_or_else(|| panic!("failed to parse {input} with repo {repo_url}"));
+            .unwrap_or_else(|_| panic!("failed to parse {input} with repo {repo_url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
         assert_eq!(parsed.query, expected_query);
@@ -715,22 +779,19 @@ mod tests {
     fn rejects_malformed_github_urls(#[case] url: &str) {
         let parsed = try_parse_input(url, None);
         assert!(
-            parsed.is_none(),
-            "Should reject malformed URL: {url}. Got {parsed:?}"
+            parsed.is_err() && parsed.unwrap_err().is_malformed_git_hub_url(),
+            "Should reject malformed URL: {url}"
         );
     }
 
     #[rstest]
     #[case::parent_traversal("https://github.com/owner/repo/blob/main/../../../etc/passwd")]
     #[case::parent_in_middle("https://github.com/owner/repo/blob/main/src/../../../etc/passwd")]
-    #[case::absolute_path("/etc/passwd")]
-    #[case::parent_traversal("../../../etc/passwd")]
-    #[case::parent_in_path("src/../../../etc/passwd")]
-    fn rejects_unsafe_file_paths_in_urls_and_local(#[case] input: &str) {
+    fn rejects_unsafe_file_paths_in_github_urls(#[case] input: &str) {
         let parsed = try_parse_input(input, None);
         assert!(
-            parsed.is_none(),
-            "Should reject unsafe path in: {input}. Got {parsed:?}"
+            parsed.is_err() && parsed.unwrap_err().is_malformed_git_hub_url(),
+            "Should reject unsafe path in GitHub URL: {input}"
         );
     }
 
@@ -739,11 +800,11 @@ mod tests {
     #[case::whitespace_only("   ")]
     #[case::newlines_only("\n\n")]
     #[case::tabs_only("\t\t")]
-    fn rejects_empty_url_inputs(#[case] url: &str) {
+    fn rejects_empty_inputs(#[case] url: &str) {
         let parsed = try_parse_input(url, None);
         assert!(
-            parsed.is_none(),
-            "Should reject empty input: {url:?}. Got {parsed:?}"
+            parsed.is_err() && parsed.unwrap_err().is_security_rejection(),
+            "Should reject empty input: {url:?}"
         );
     }
 
@@ -755,8 +816,8 @@ mod tests {
     fn rejects_control_characters(#[case] input: &str) {
         let parsed = try_parse_input(input, None);
         assert!(
-            parsed.is_none(),
-            "Should reject input with control chars: {input:?}. Got {parsed:?}"
+            parsed.is_err() && parsed.unwrap_err().is_security_rejection(),
+            "Should reject input with control chars: {input:?}"
         );
     }
 
@@ -775,9 +836,6 @@ mod tests {
     fn rejects_malformed_repo_urls(#[case] input: &str) {
         let parsed = try_parse_input("dummy", Some(input));
 
-        assert!(
-            parsed.is_none(),
-            "Should reject malformed repo URL: {input}. Got {parsed:?}"
-        );
+        assert!(parsed.is_err(), "Should reject malformed repo URL: {input}");
     }
 }

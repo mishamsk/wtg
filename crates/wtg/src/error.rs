@@ -7,6 +7,7 @@ pub type WtgResult<T> = std::result::Result<T, WtgError>;
 
 #[derive(Debug, strum::EnumIs)]
 pub enum WtgError {
+    EmptyInput,
     NotInGitRepo,
     NotFound(String),
     Git(git2::Error),
@@ -18,6 +19,9 @@ pub enum WtgError {
     Io(std::io::Error),
     Cli { message: String, code: i32 },
     Timeout,
+    NotGitHubUrl(String),
+    MalformedGitHubUrl(String),
+    SecurityRejection(String),
 }
 
 impl fmt::Display for WtgError {
@@ -134,6 +138,69 @@ impl fmt::Display for WtgError {
                     f,
                     "   {}",
                     "Did you forget to pay your internet bill? 💸".red()
+                )
+            }
+            Self::NotGitHubUrl(url) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🤨 That's a URL alright, but it's not GitHub!"
+                        .yellow()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}: {}", "You gave me".yellow(), url.clone().cyan())?;
+                writeln!(f)?;
+                writeln!(f, "   {}", "I only speak GitHub URLs, buddy! 🐙".yellow())
+            }
+            Self::MalformedGitHubUrl(url) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "😵 That GitHub URL is more broken than my ex's promises!"
+                        .red()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}: {}", "You gave me".red(), url.clone().cyan())?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Expected something like: https://github.com/owner/repo/issues/123".yellow()
+                )?;
+                writeln!(f, "   {}", "But this? This is just sad. 😢".red())
+            }
+            Self::SecurityRejection(reason) => {
+                writeln!(f, "{}", "🚨 Whoa there! Security alert!".red().bold())?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "I can't process that input for personal reasons. 🛡️".red()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}: {}", "Reason".yellow(), reason.clone())?;
+                writeln!(f)?;
+                writeln!(f, "   {}", "Please, try something safer? 🙏".yellow())
+            }
+            Self::EmptyInput => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🫥 Excuse me, but I can't read minds!".yellow().bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "You gave me... nothing. Nada. Zilch. The void! 👻".yellow()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Try giving me something to work with, please!".yellow()
                 )
             }
         }

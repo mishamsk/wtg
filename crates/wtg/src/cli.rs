@@ -2,6 +2,7 @@ use clap::Parser;
 
 use crate::{
     constants,
+    error::{WtgError, WtgResult},
     parse_input::{ParsedInput, try_parse_input},
 };
 
@@ -28,9 +29,8 @@ pub struct Cli {
 
 impl Cli {
     /// Parse the input and -r flag to determine the repository and query
-    #[must_use]
-    pub(crate) fn parse_input(&self) -> Option<ParsedInput> {
-        let input = self.input.as_ref()?;
+    pub(crate) fn parse_input(&self) -> WtgResult<ParsedInput> {
+        let input = self.input.as_ref().ok_or_else(|| WtgError::EmptyInput)?;
 
         try_parse_input(input, self.repo.as_deref())
     }
