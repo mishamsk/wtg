@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use percent_encoding::percent_decode_str;
 use url::Url;
 
 use crate::{
@@ -96,8 +97,8 @@ impl ParsedInput {
 /// - `Err(MalformedGitHubUrl)` if it's a GitHub URL but malformed
 fn try_parse_input_from_github_url(url: &str) -> Result<ParsedInput, WtgError> {
     debug_assert!(
-        sanitize_query(url).is_ok(),
-        "URL should be sanitized before parsing"
+        reject_control_chars(url).is_ok(),
+        "URL should be validated before parsing"
     );
 
     // Try SSH format first
@@ -112,57 +113,50 @@ fn try_parse_input_from_github_url(url: &str) -> Result<ParsedInput, WtgError> {
     }
 }
 
-fn try_parse_input_str(raw_input: &str) -> Result<Query, WtgError> {
-    // Sanitize input
-    let input = sanitize_query(raw_input)?;
-
+/// Parse a pre-validated input string into a Query
+/// Assumes input is already trimmed, non-empty, and has no control characters
+fn parse_query(input: &str) -> Query {
     // If it starts with a '#', try to parse as issue or PR number
     if let Some(stripped) = input.strip_prefix('#')
         && let Ok(number) = stripped.parse()
     {
-        return Ok(Query::IssueOrPr(number));
+        return Query::IssueOrPr(number);
     }
 
     // Otherwise we have to treat as unknown, since path & branches
     // may look the same, and other git refs may be indistinguishable
     // from commit hashes without querying the repo
-    Ok(Query::Unknown(input))
+    Query::Unknown(input.to_string())
 }
 
 pub(crate) fn try_parse_input(
     raw_input: &str,
     repo_url: Option<&str>,
 ) -> Result<ParsedInput, WtgError> {
-    let raw_input = raw_input.trim();
+    // Trim and validate input upfront
+    let input = raw_input.trim();
+    if input.is_empty() {
+        return Err(WtgError::EmptyInput);
+    }
+    let input = reject_control_chars(input)?;
 
     // If repo url is explicitly provided, use it as the repo and input as the query
     if let Some(repo_url) = repo_url {
         let repo_info = parse_github_repo_url(repo_url)
             .ok_or_else(|| WtgError::MalformedGitHubUrl(repo_url.to_string()))?;
-        let query = try_parse_input_str(raw_input)?;
-        return Ok(ParsedInput::new_with_remote(repo_info, query));
+        return Ok(ParsedInput::new_with_remote(repo_info, parse_query(input)));
     }
-
-    // Skip GitHub URL parsing if input is empty - let try_parse_input_str handle it
-    if raw_input.is_empty() {
-        return try_parse_input_str(raw_input).map(ParsedInput::new_local_query);
-    }
-
-    // Check for control characters before URL parsing
-    // (try_parse_input_from_github_url assumes sanitized input)
-    sanitize_query(raw_input)?;
 
     // Try to parse input as a GitHub URL
-    match try_parse_input_from_github_url(raw_input) {
+    match try_parse_input_from_github_url(input) {
         Ok(parsed) => Ok(parsed),
         Err(WtgError::NotGitHubUrl(_) | WtgError::MalformedGitHubUrl(_)) => {
             // If it looks like a URL attempt but failed, propagate the error
-            // Check if it's actually URL-like (has scheme or looks like github URL)
-            if is_url_like(raw_input) {
-                Err(try_parse_input_from_github_url(raw_input).unwrap_err())
+            if is_url_like(input) {
+                Err(try_parse_input_from_github_url(input).unwrap_err())
             } else {
                 // Not a URL, treat as a local query
-                try_parse_input_str(raw_input).map(ParsedInput::new_local_query)
+                Ok(ParsedInput::new_local_query(parse_query(input)))
             }
         }
         Err(e) => Err(e),
@@ -290,7 +284,7 @@ fn collect_segments(path: &str) -> Vec<String> {
     path.trim_matches('/')
         .split('/')
         .filter(|segment| !segment.is_empty())
-        .map(ToString::to_string)
+        .map(|s| percent_decode_str(s).decode_utf8_lossy().into_owned())
         .collect()
 }
 
@@ -335,7 +329,11 @@ fn parsed_input_from_segments(
             let hash = segments.get(1).ok_or_else(|| {
                 WtgError::MalformedGitHubUrl(format!("Missing commit hash in URL: {url}"))
             })?;
-            Query::GitCommit(sanitize_query(hash)?)
+            // URL segments may contain percent-decoded control chars, validate them
+            reject_control_chars(hash).map_err(|_| {
+                WtgError::MalformedGitHubUrl(format!("Invalid characters in URL: {url}"))
+            })?;
+            Query::GitCommit(hash.clone())
         }
         "issues" => {
             let num_str = segments.get(1).ok_or_else(|| {
@@ -359,12 +357,14 @@ fn parsed_input_from_segments(
         "blob" | "tree" if segments.len() >= 2 => {
             // TODO: this is not correct when branch names contain slashes. Deterministically
             // resolving branch vs path requires API calls.
-            let path = segments[2..]
-                .iter()
-                .map(|s| sanitize_query(s))
-                .fold(PathBuf::new(), |path, seg| {
-                    path.join(seg.unwrap_or_default())
-                });
+            let mut path = PathBuf::new();
+            for seg in &segments[2..] {
+                // URL segments may contain percent-decoded control chars, validate them
+                reject_control_chars(seg).map_err(|_| {
+                    WtgError::MalformedGitHubUrl(format!("Invalid characters in URL: {url}"))
+                })?;
+                path.push(seg);
+            }
 
             // Do a security check on the path
             check_path(&path).map_err(|_| {
@@ -400,20 +400,15 @@ fn sanitize_owner_repo_segment(raw: &str) -> Option<String> {
     }
 }
 
-/// Sanitize a query string by trimming whitespace and rejecting control characters
-pub(crate) fn sanitize_query(raw: &str) -> WtgResult<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(WtgError::EmptyInput);
-    }
-
-    if trimmed.chars().any(char::is_control) {
+/// Check for control characters (security check only, no empty check)
+/// Returns the input unchanged if valid, avoiding allocation
+fn reject_control_chars(input: &str) -> WtgResult<&str> {
+    if input.chars().any(char::is_control) {
         return Err(WtgError::SecurityRejection(
             "Input contains control characters (null bytes, newlines, etc.)".to_string(),
         ));
     }
-
-    Ok(trimmed.to_string())
+    Ok(input)
 }
 
 /// Checks whether the given path is valid & safe to use
@@ -611,12 +606,18 @@ mod tests {
         "a/b/c/d.txt"
     )]
     #[case::tree_directory("https://github.com/owner/repo/tree/main/src", "owner", "repo", "src")]
-    /// TODO: this is obvisouly wrong, but deterministically resolving branch vs path requires API calls
+    // TODO: this is obviously wrong, but deterministically resolving branch vs path requires API calls
     #[case::tree_nested_branch(
         "https://github.com/owner/repo/tree/feat/new-feature/docs/api",
         "owner",
         "repo",
         "new-feature/docs/api"
+    )]
+    #[case::percent_encoded_space(
+        "https://github.com/owner/repo/blob/main/path%20with%20spaces/file.txt",
+        "owner",
+        "repo",
+        "path with spaces/file.txt"
     )]
     fn parses_github_file_urls(
         #[case] url: &str,
@@ -825,6 +826,19 @@ mod tests {
         assert!(
             parsed.is_err() && parsed.unwrap_err().is_malformed_git_hub_url(),
             "Should reject unsafe path in GitHub URL: {input}"
+        );
+    }
+
+    #[rstest]
+    #[case::null_in_commit("https://github.com/owner/repo/commit/abc%00def")]
+    #[case::newline_in_path("https://github.com/owner/repo/blob/main/file%0Aname.txt")]
+    #[case::carriage_return_in_path("https://github.com/owner/repo/blob/main/file%0Dname.txt")]
+    #[case::tab_in_path("https://github.com/owner/repo/blob/main/file%09name.txt")]
+    fn rejects_percent_encoded_control_chars_in_urls(#[case] input: &str) {
+        let parsed = try_parse_input(input, None);
+        assert!(
+            parsed.is_err() && parsed.unwrap_err().is_malformed_git_hub_url(),
+            "Should reject percent-encoded control chars in URL: {input}"
         );
     }
 
