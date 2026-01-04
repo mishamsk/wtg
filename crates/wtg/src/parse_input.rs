@@ -148,10 +148,14 @@ pub(crate) fn try_parse_input(
         return try_parse_input_str(raw_input).map(ParsedInput::new_local_query);
     }
 
+    // Check for control characters before URL parsing
+    // (try_parse_input_from_github_url assumes sanitized input)
+    sanitize_query(raw_input)?;
+
     // Try to parse input as a GitHub URL
     match try_parse_input_from_github_url(raw_input) {
         Ok(parsed) => Ok(parsed),
-        Err(WtgError::NotGitHubUrl(_)) | Err(WtgError::MalformedGitHubUrl(_)) => {
+        Err(WtgError::NotGitHubUrl(_) | WtgError::MalformedGitHubUrl(_)) => {
             // If it looks like a URL attempt but failed, propagate the error
             // Check if it's actually URL-like (has scheme or looks like github URL)
             if is_url_like(raw_input) {
@@ -194,10 +198,10 @@ pub(crate) fn parse_github_repo_url(url: &str) -> Option<GhRepoInfo> {
         return owner_repo_from_segments(&segments, false);
     }
 
-    if let Ok((segments, is_api)) = parse_http_github_segments(trimmed) {
-        if let Some(owner_repo) = owner_repo_from_segments(&segments, is_api) {
-            return Some(owner_repo);
-        }
+    if let Ok((segments, is_api)) = parse_http_github_segments(trimmed)
+        && let Some(owner_repo) = owner_repo_from_segments(&segments, is_api)
+    {
+        return Some(owner_repo);
     }
 
     // Handle simple owner/repo format
@@ -312,7 +316,11 @@ fn split_url_segments(segments: &[String], is_api: bool) -> Option<(GhRepoInfo, 
     ))
 }
 
-fn parsed_input_from_segments(segments: &[String], is_api: bool) -> WtgResult<Option<ParsedInput>> {
+fn parsed_input_from_segments(
+    segments: &[String],
+    is_api: bool,
+    url: &str,
+) -> WtgResult<ParsedInput> {
     let (repo_info, segments) = split_url_segments(segments, is_api).ok_or_else(|| {
         WtgError::MalformedGitHubUrl("Where's the repo, where's the owner?".to_string())
     })?;
@@ -322,10 +330,31 @@ fn parsed_input_from_segments(segments: &[String], is_api: bool) -> WtgResult<Op
         .ok_or_else(|| WtgError::MalformedGitHubUrl("No route found in GitHub URL".to_string()))?
         .as_str();
 
-    let query = match segments.first()?.as_str() {
-        "commit" => Query::GitCommit(sanitize_query(segments.get(1)?)?),
-        "issues" => Query::Issue((segments.get(1)?).parse().ok()?),
-        "pull" => Query::Pr((segments.get(1)?).parse().ok()?),
+    let query = match route {
+        "commit" => {
+            let hash = segments.get(1).ok_or_else(|| {
+                WtgError::MalformedGitHubUrl(format!("Missing commit hash in URL: {url}"))
+            })?;
+            Query::GitCommit(sanitize_query(hash)?)
+        }
+        "issues" => {
+            let num_str = segments.get(1).ok_or_else(|| {
+                WtgError::MalformedGitHubUrl(format!("Missing issue number in URL: {url}"))
+            })?;
+            let num = num_str.parse().map_err(|_| {
+                WtgError::MalformedGitHubUrl(format!("Invalid issue number in URL: {url}"))
+            })?;
+            Query::Issue(num)
+        }
+        "pull" => {
+            let num_str = segments.get(1).ok_or_else(|| {
+                WtgError::MalformedGitHubUrl(format!("Missing PR number in URL: {url}"))
+            })?;
+            let num = num_str.parse().map_err(|_| {
+                WtgError::MalformedGitHubUrl(format!("Invalid PR number in URL: {url}"))
+            })?;
+            Query::Pr(num)
+        }
         // File path will start from segment index 2, e.g., /blob/branch/path/to/file
         "blob" | "tree" if segments.len() >= 2 => {
             // TODO: this is not correct when branch names contain slashes. Deterministically
@@ -338,16 +367,20 @@ fn parsed_input_from_segments(segments: &[String], is_api: bool) -> WtgResult<Op
                 });
 
             // Do a security check on the path
-            if !check_path(&path) {
-                return None;
-            }
+            check_path(&path).map_err(|_| {
+                WtgError::MalformedGitHubUrl(format!("Invalid file path in URL: {url}"))
+            })?;
 
             Query::FilePath(path)
         }
-        _ => return None,
+        _ => {
+            return Err(WtgError::MalformedGitHubUrl(format!(
+                "Unrecognized GitHub URL route: {url}"
+            )));
+        }
     };
 
-    Some(ParsedInput::new_with_remote(repo_info, query))
+    Ok(ParsedInput::new_with_remote(repo_info, query))
 }
 
 /// Sanitize owner or repo segment by trimming whitespace and allowing only certain characters
@@ -803,7 +836,7 @@ mod tests {
     fn rejects_empty_inputs(#[case] url: &str) {
         let parsed = try_parse_input(url, None);
         assert!(
-            parsed.is_err() && parsed.unwrap_err().is_security_rejection(),
+            parsed.is_err() && parsed.unwrap_err().is_empty_input(),
             "Should reject empty input: {url:?}"
         );
     }
