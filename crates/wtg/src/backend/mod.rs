@@ -226,13 +226,19 @@ async fn resolve_issue(backend: &dyn Backend, number: u64) -> WtgResult<Identifi
                         Some(c) => Some(cross_backend.enrich_commit(c).await),
                         None => None,
                     };
+
+                    // Try issue's repo first, fall back to PR's repo
                     let release = if let Some(ref c) = commit {
-                        cross_backend
-                            .find_release_for_commit(&c.hash, Some(c.date))
-                            .await
+                        let hash = &c.hash;
+                        let date = Some(c.date);
+                        match backend.find_release_for_commit(hash, date).await {
+                            Some(r) => Some(r),
+                            None => cross_backend.find_release_for_commit(hash, date).await,
+                        }
                     } else {
                         None
                     };
+
                     (commit, release)
                 } else {
                     (None, None)

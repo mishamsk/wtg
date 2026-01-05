@@ -95,14 +95,17 @@ impl CombinedBackend {
                 candidates.iter().map(|c| c.name.clone()).collect()
             };
 
-            for (i, tag_name) in target_names.iter().enumerate() {
-                if let Some(release) = client.fetch_release_by_tag(repo_info, tag_name).await
-                    && i < enriched_candidates.len()
-                {
-                    enriched_candidates[i].is_release = true;
-                    enriched_candidates[i].release_name = release.name;
-                    enriched_candidates[i].release_url = Some(release.url);
-                    enriched_candidates[i].published_at = release.published_at;
+            for tag_name in &target_names {
+                if let Some(release) = client.fetch_release_by_tag(repo_info, tag_name).await {
+                    // Find the candidate with matching name and enrich it
+                    if let Some(candidate) =
+                        enriched_candidates.iter_mut().find(|c| &c.name == tag_name)
+                    {
+                        candidate.is_release = true;
+                        candidate.release_name.clone_from(&release.name);
+                        candidate.release_url = Some(release.url);
+                        candidate.published_at = release.published_at;
+                    }
                 }
             }
         }
@@ -120,13 +123,19 @@ impl CombinedBackend {
             && let Some(since) = commit_date
         {
             let releases = client.fetch_releases_since(repo_info, since).await;
+            let mut api_candidates: Vec<TagInfo> = Vec::new();
 
             for release in releases {
                 // Try local tag first
-                if let Some(tag) = repo.tag_from_release(&release)
+                if let Some(mut tag) = repo.tag_from_release(&release)
                     && repo.tag_contains_commit(&tag.commit_hash, commit_hash)
                 {
-                    return Some(tag);
+                    tag.is_release = true;
+                    tag.release_name.clone_from(&release.name);
+                    tag.release_url = Some(release.url.clone());
+                    tag.published_at = release.published_at;
+                    api_candidates.push(tag);
+                    continue;
                 }
 
                 // Fallback to API check
@@ -134,8 +143,22 @@ impl CombinedBackend {
                     .fetch_tag_info_for_release(&release, repo_info, commit_hash)
                     .await
                 {
-                    return Some(tag);
+                    api_candidates.push(tag);
                 }
+            }
+
+            // Pick best from API candidates using same logic as local candidates
+            if !api_candidates.is_empty() {
+                let api_timestamps: HashMap<String, i64> = api_candidates
+                    .iter()
+                    .map(|tag| {
+                        (
+                            tag.commit_hash.clone(),
+                            repo.get_commit_timestamp(&tag.commit_hash),
+                        )
+                    })
+                    .collect();
+                return Self::pick_best_tag(&api_candidates, &api_timestamps);
             }
         }
 
