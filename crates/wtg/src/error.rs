@@ -10,6 +10,7 @@ pub enum WtgError {
     EmptyInput,
     NotInGitRepo,
     NotFound(String),
+    Unsupported(String),
     Git(git2::Error),
     GhNoClient,
     GhRateLimit(OctoError),
@@ -52,6 +53,15 @@ impl fmt::Display for WtgError {
                 writeln!(f, "   {} Git tag", "❌".red())?;
                 writeln!(f)?;
                 writeln!(f, "   {}: {}", "Input was".yellow(), input.as_str().cyan())
+            }
+            Self::Unsupported(operation) => {
+                writeln!(f, "{}", "🚫 Can't do that here!".yellow().bold())?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {} is not supported with the current backend.",
+                    operation.as_str().cyan()
+                )
             }
             Self::Git(e) => write!(f, "Git error: {e}"),
             Self::GhNoClient => {

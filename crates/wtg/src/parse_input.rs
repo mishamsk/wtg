@@ -51,10 +51,10 @@ impl ParsedInput {
         self.gh_repo_info.as_ref()
     }
 
-    // #[must_use]
-    // pub(crate) fn query(&self) -> &Query {
-    //     &self.query
-    // }
+    #[must_use]
+    pub(crate) const fn query(&self) -> &Query {
+        &self.query
+    }
 
     /// Convert query to string for legacy identifier code
     /// This is a temporary bridge until identifier is refactored to use Query directly

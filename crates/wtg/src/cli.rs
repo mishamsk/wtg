@@ -22,6 +22,10 @@ pub struct Cli {
     #[arg(short = 'r', long, value_name = "URL")]
     pub repo: Option<String>,
 
+    /// Use the new trait-based backend (temporary flag for migration)
+    #[arg(short = 't', hide = true)]
+    pub use_new_backend: bool,
+
     /// Print help information
     #[arg(short, long, action = clap::ArgAction::Help)]
     help: Option<bool>,

@@ -1,0 +1,299 @@
+//! Combined backend using both local git and GitHub API.
+//!
+//! This backend uses optimal paths for each operation:
+//! - Commits: Local git first (fast), fallback to API
+//! - Files: Local git only (API would be too slow)
+//! - PRs/Issues: GitHub API only
+//! - Releases: Local tags + GitHub API for metadata
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use std::collections::HashMap;
+
+use super::Backend;
+use super::git_backend::GitBackend;
+use super::github_backend::GitHubBackend;
+use crate::error::{WtgError, WtgResult};
+use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
+use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
+
+/// Combined backend using both local git and GitHub API.
+///
+/// Chooses the optimal path for each operation:
+/// - Uses local git for fast commit/file/tag lookups
+/// - Uses GitHub API for PR/issue data and release metadata
+/// - Enriches local data with API data when beneficial
+///
+/// This backend overrides the individual trait methods with fallback logic,
+/// then uses the default `resolve()` implementation which calls those methods.
+/// This ensures fallback works correctly for all query types.
+pub struct CombinedBackend {
+    git: GitBackend,
+    github: GitHubBackend,
+}
+
+impl CombinedBackend {
+    /// Create a new `CombinedBackend` from git and GitHub backends.
+    #[must_use]
+    pub const fn new(git: GitBackend, github: GitHubBackend) -> Self {
+        Self { git, github }
+    }
+
+    /// Get a reference to the underlying `GitRepo`.
+    #[must_use]
+    pub const fn git_repo(&self) -> &GitRepo {
+        self.git.git_repo()
+    }
+
+    /// Get a reference to the `GitHubClient`.
+    #[must_use]
+    pub fn github_client(&self) -> &GitHubClient {
+        self.github.client()
+    }
+
+    /// Find the best release/tag for a commit using both local and API data.
+    ///
+    /// Strategy:
+    /// 1. Get local tag candidates containing the commit
+    /// 2. Enrich candidates with GitHub release metadata
+    /// 3. Pick best tag (prefer semver releases)
+    /// 4. If no local candidates, fall back to GitHub API release search
+    async fn find_release_combined(
+        &self,
+        commit_hash: &str,
+        commit_date: Option<DateTime<Utc>>,
+    ) -> Option<TagInfo> {
+        let repo = self.git.git_repo();
+        let repo_info = self.github.repo_info()?;
+        let client = self.github.client();
+
+        // Get local tag candidates
+        let candidates = repo.tags_containing_commit(commit_hash);
+        let has_semver = candidates.iter().any(TagInfo::is_semver);
+
+        // Build timestamp map for sorting
+        let timestamps: HashMap<String, i64> = candidates
+            .iter()
+            .map(|tag| {
+                (
+                    tag.commit_hash.clone(),
+                    repo.get_commit_timestamp(&tag.commit_hash),
+                )
+            })
+            .collect();
+
+        // Enrich candidates with release metadata from GitHub
+        let mut enriched_candidates = candidates.clone();
+        if !candidates.is_empty() {
+            let target_names: Vec<_> = if has_semver {
+                candidates
+                    .iter()
+                    .filter(|c| c.is_semver())
+                    .map(|c| c.name.clone())
+                    .collect()
+            } else {
+                candidates.iter().map(|c| c.name.clone()).collect()
+            };
+
+            for (i, tag_name) in target_names.iter().enumerate() {
+                if let Some(release) = client.fetch_release_by_tag(repo_info, tag_name).await
+                    && i < enriched_candidates.len()
+                {
+                    enriched_candidates[i].is_release = true;
+                    enriched_candidates[i].release_name = release.name;
+                    enriched_candidates[i].release_url = Some(release.url);
+                    enriched_candidates[i].published_at = release.published_at;
+                }
+            }
+        }
+
+        // Pick best from local candidates
+        let local_best = Self::pick_best_tag(&enriched_candidates, &timestamps);
+
+        // If we have a semver tag, prefer it
+        if has_semver {
+            return local_best;
+        }
+
+        // Otherwise, try fetching releases from API as fallback
+        if candidates.is_empty()
+            && let Some(since) = commit_date
+        {
+            let releases = client.fetch_releases_since(repo_info, since).await;
+
+            for release in releases {
+                // Try local tag first
+                if let Some(tag) = repo.tag_from_release(&release)
+                    && repo.tag_contains_commit(&tag.commit_hash, commit_hash)
+                {
+                    return Some(tag);
+                }
+
+                // Fallback to API check
+                if let Some(tag) = client
+                    .fetch_tag_info_for_release(&release, repo_info, commit_hash)
+                    .await
+                {
+                    return Some(tag);
+                }
+            }
+        }
+
+        local_best
+    }
+
+    /// Pick the best tag from candidates based on priority rules.
+    fn pick_best_tag(candidates: &[TagInfo], timestamps: &HashMap<String, i64>) -> Option<TagInfo> {
+        fn select_with_pred<F>(
+            candidates: &[TagInfo],
+            timestamps: &HashMap<String, i64>,
+            predicate: F,
+        ) -> Option<TagInfo>
+        where
+            F: Fn(&TagInfo) -> bool,
+        {
+            candidates
+                .iter()
+                .filter(|tag| predicate(tag))
+                .min_by_key(|tag| {
+                    timestamps
+                        .get(&tag.commit_hash)
+                        .copied()
+                        .unwrap_or(i64::MAX)
+                })
+                .cloned()
+        }
+
+        // Priority: released semver > unreleased semver > released non-semver > unreleased non-semver
+        select_with_pred(candidates, timestamps, |t| t.is_release && t.is_semver())
+            .or_else(|| {
+                select_with_pred(candidates, timestamps, |t| !t.is_release && t.is_semver())
+            })
+            .or_else(|| {
+                select_with_pred(candidates, timestamps, |t| t.is_release && !t.is_semver())
+            })
+            .or_else(|| {
+                select_with_pred(candidates, timestamps, |t| !t.is_release && !t.is_semver())
+            })
+    }
+}
+
+#[async_trait]
+impl Backend for CombinedBackend {
+    fn repo_info(&self) -> Option<&GhRepoInfo> {
+        self.github.repo_info()
+    }
+
+    async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
+        // For cross-project, return GitHub-only backend (no local clone)
+        self.github.for_repo(repo_info).await
+    }
+
+    // ============================================
+    // Commit operations - local first, fallback to API
+    // ============================================
+
+    async fn find_commit(&self, hash: &str) -> WtgResult<CommitInfo> {
+        // Try local first (fast)
+        match self.git.find_commit(hash).await {
+            Ok(commit) => Ok(commit),
+            Err(WtgError::NotFound(_)) => {
+                // Commit might be in remote but not pulled - try GitHub API
+                self.github.find_commit(hash).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn enrich_commit(&self, mut commit: CommitInfo) -> CommitInfo {
+        // Already enriched?
+        if commit.commit_url.is_some() && commit.author_url.is_some() {
+            return commit;
+        }
+
+        let Some(repo_info) = self.github.repo_info() else {
+            return commit;
+        };
+
+        // Try to extract username from email first (cheap, no API call)
+        if commit.author_url.is_none()
+            && let Some(email) = commit.author_email.as_deref()
+        {
+            commit.author_url = self.author_url_from_email(email);
+        }
+
+        // Add commit URL if missing
+        if commit.commit_url.is_none() {
+            commit.commit_url = Some(GitHubClient::commit_url(repo_info, &commit.hash));
+        }
+
+        // If still missing author info, try API
+        if (commit.author_url.is_none() || commit.author_login.is_none())
+            && let Some(enriched) = self
+                .github
+                .client()
+                .fetch_commit_full_info(repo_info, &commit.hash)
+                .await
+        {
+            commit.author_login = enriched.author_login;
+            if commit.author_url.is_none() {
+                commit.author_url = enriched.author_url;
+            }
+        }
+
+        commit
+    }
+
+    // ============================================
+    // File operations - local only
+    // ============================================
+
+    async fn find_file(&self, path: &str) -> WtgResult<FileInfo> {
+        // Only git has efficient file history
+        self.git.find_file(path).await
+    }
+
+    // ============================================
+    // Tag/Release operations - combined
+    // ============================================
+
+    async fn find_tag(&self, name: &str) -> WtgResult<TagInfo> {
+        self.git.find_tag(name).await
+    }
+
+    async fn find_release_for_commit(
+        &self,
+        commit_hash: &str,
+        commit_date: Option<DateTime<Utc>>,
+    ) -> Option<TagInfo> {
+        self.find_release_combined(commit_hash, commit_date).await
+    }
+
+    // ============================================
+    // Issue/PR operations - GitHub API only
+    // ============================================
+
+    async fn fetch_issue(&self, number: u64) -> WtgResult<ExtendedIssueInfo> {
+        self.github.fetch_issue(number).await
+    }
+
+    async fn fetch_pr(&self, number: u64) -> WtgResult<PullRequestInfo> {
+        self.github.fetch_pr(number).await
+    }
+
+    // ============================================
+    // URL generation - delegate to GitHub backend
+    // ============================================
+
+    fn commit_url(&self, hash: &str) -> Option<String> {
+        self.github.commit_url(hash)
+    }
+
+    fn tag_url(&self, tag: &str) -> Option<String> {
+        self.github.tag_url(tag)
+    }
+
+    fn author_url_from_email(&self, email: &str) -> Option<String> {
+        self.github.author_url_from_email(email)
+    }
+}

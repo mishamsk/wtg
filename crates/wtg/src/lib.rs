@@ -1,5 +1,6 @@
 use clap::Parser;
 
+pub mod backend;
 pub mod cli;
 pub mod constants;
 pub mod error;
@@ -63,6 +64,11 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
     let parsed_input = cli.parse_input()?;
 
+    // Use new backend path if -t flag is set
+    if cli.use_new_backend {
+        return run_with_new_backend(parsed_input).await;
+    }
+
     // Create the appropriate repo manager
     let repo_manager = if let Some(gh_repo_info) = parsed_input.gh_repo_info() {
         RepoManager::remote(gh_repo_info.clone())?
@@ -92,6 +98,29 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     .await?;
 
     // Display the result
+    output::display(result)?;
+
+    Ok(())
+}
+
+/// Run using the new trait-based backend architecture.
+async fn run_with_new_backend(parsed_input: parse_input::ParsedInput) -> WtgResult<()> {
+    use backend::{resolve, resolve_backend};
+
+    // Create the backend based on available resources
+    let backend = resolve_backend(&parsed_input)?;
+
+    // Print snarky messages if no GitHub remote (only for local repos with git-only backend)
+    if backend.repo_info().is_none()
+        && let Ok(git_repo) = git::GitRepo::open()
+    {
+        remote::check_remote_and_snark(git_repo.path());
+    }
+
+    // Resolve the query using the backend
+    let result = resolve(backend.as_ref(), parsed_input.query()).await?;
+
+    // Display the result (same output code works with both paths)
     output::display(result)?;
 
     Ok(())
