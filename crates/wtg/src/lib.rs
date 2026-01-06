@@ -12,6 +12,7 @@ pub mod output;
 pub(crate) mod parse_input;
 pub mod remote;
 pub mod repo_manager;
+mod resolution;
 
 use cli::Cli;
 use error::{WtgError, WtgResult};
@@ -105,7 +106,8 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
 
 /// Run using the new trait-based backend architecture.
 async fn run_with_new_backend(parsed_input: parse_input::ParsedInput) -> WtgResult<()> {
-    use backend::{resolve, resolve_backend};
+    use backend::resolve_backend;
+    use resolution::resolve;
 
     // Create the backend based on available resources
     let backend = resolve_backend(&parsed_input)?;
