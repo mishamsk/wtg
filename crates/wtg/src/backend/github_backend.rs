@@ -146,16 +146,6 @@ impl Backend for GitHubBackend {
     }
 
     fn author_url_from_email(&self, email: &str) -> Option<String> {
-        // GitHub emails are typically: username@users.noreply.github.com
-        // Or: id+username@users.noreply.github.com
-        if email.ends_with("@users.noreply.github.com") {
-            let parts: Vec<&str> = email.split('@').collect();
-            if let Some(user_part) = parts.first()
-                && let Some(username) = user_part.split('+').next_back()
-            {
-                return Some(GitHubClient::profile_url(username));
-            }
-        }
-        None
+        GitHubClient::author_url_from_email(email)
     }
 }

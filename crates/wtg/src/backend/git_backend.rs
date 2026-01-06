@@ -110,21 +110,6 @@ impl GitBackend {
                 select_with_pred(candidates, timestamps, |t| !t.is_release && !t.is_semver())
             })
     }
-
-    /// Try to extract GitHub username from email.
-    fn extract_github_username(email: &str) -> Option<String> {
-        // GitHub emails are typically: username@users.noreply.github.com
-        // Or: id+username@users.noreply.github.com
-        if email.ends_with("@users.noreply.github.com") {
-            let parts: Vec<&str> = email.split('@').collect();
-            if let Some(user_part) = parts.first()
-                && let Some(username) = user_part.split('+').next_back()
-            {
-                return Some(username.to_string());
-            }
-        }
-        None
-    }
 }
 
 #[async_trait]
@@ -200,6 +185,6 @@ impl Backend for GitBackend {
     }
 
     fn author_url_from_email(&self, email: &str) -> Option<String> {
-        Self::extract_github_username(email).map(|u| GitHubClient::profile_url(&u))
+        GitHubClient::author_url_from_email(email)
     }
 }

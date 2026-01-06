@@ -247,7 +247,7 @@ impl Backend for CombinedBackend {
 
         // Add commit URL if missing
         if commit.commit_url.is_none() {
-            commit.commit_url = Some(GitHubClient::commit_url(repo_info, &commit.hash));
+            commit.commit_url = self.commit_url(&commit.hash);
         }
 
         // If still missing author info, try API

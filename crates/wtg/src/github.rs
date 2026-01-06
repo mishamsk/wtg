@@ -681,6 +681,24 @@ impl GitHubClient {
         )
     }
 
+    /// Build a profile URL from a GitHub noreply email address.
+    ///
+    /// Extracts username from patterns:
+    /// - `username@users.noreply.github.com`
+    /// - `id+username@users.noreply.github.com`
+    #[must_use]
+    pub fn author_url_from_email(email: &str) -> Option<String> {
+        if email.ends_with("@users.noreply.github.com") {
+            let parts: Vec<&str> = email.split('@').collect();
+            if let Some(user_part) = parts.first()
+                && let Some(username) = user_part.split('+').next_back()
+            {
+                return Some(Self::profile_url(username));
+            }
+        }
+        None
+    }
+
     const fn connect_timeout() -> Duration {
         Duration::from_secs(CONNECT_TIMEOUT_SECS)
     }
