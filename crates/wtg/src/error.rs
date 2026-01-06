@@ -12,7 +12,7 @@ pub enum WtgError {
     NotFound(String),
     Unsupported(String),
     Git(git2::Error),
-    GhNoClient,
+    GhConnectionLost,
     GhRateLimit(OctoError),
     GhSaml(OctoError),
     GitHub(OctoError),
@@ -64,11 +64,11 @@ impl fmt::Display for WtgError {
                 )
             }
             Self::Git(e) => write!(f, "Git error: {e}"),
-            Self::GhNoClient => {
+            Self::GhConnectionLost => {
                 writeln!(
                     f,
                     "{}",
-                    "💥 Wait a minute... No GitHub client found and we still bother you!"
+                    "📡 Houston, we have a problem! Connection lost mid-flight!"
                         .red()
                         .bold()
                 )?;
@@ -76,7 +76,12 @@ impl fmt::Display for WtgError {
                 writeln!(
                     f,
                     "   {}",
-                    "You should not have seen this error 🙈".yellow()
+                    "GitHub was there a second ago, now it's playing hide and seek. 👻".red()
+                )?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Check your internet connection and try again!".yellow()
                 )
             }
             Self::GhRateLimit(_) => {

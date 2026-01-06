@@ -63,7 +63,7 @@ async fn integration_identify_ghostty_issue_4800() {
 
     // Create a GitHub client for the ghostty repository
     let repo_info = GhRepoInfo::new("ghostty-org".to_string(), "ghostty".to_string());
-    let client = GitHubClient::new();
+    let client = GitHubClient::new().expect("Failed to create GitHub client");
 
     // Fetch the issue
     let issue = client

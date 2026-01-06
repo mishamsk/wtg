@@ -24,12 +24,14 @@ pub struct GitHubBackend {
 
 impl GitHubBackend {
     /// Create a new `GitHubBackend` for a repository.
+    ///
+    /// Returns `None` if no GitHub client can be created.
     #[must_use]
-    pub fn new(repo_info: GhRepoInfo) -> Self {
-        Self {
-            client: Arc::new(GitHubClient::new()),
+    pub fn new(repo_info: GhRepoInfo) -> Option<Self> {
+        Some(Self {
+            client: Arc::new(GitHubClient::new()?),
             repo_info,
-        }
+        })
     }
 
     /// Create a `GitHubBackend` with a shared client.

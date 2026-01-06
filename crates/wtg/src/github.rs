@@ -102,12 +102,17 @@ impl GhRepoInfo {
 ///
 /// - Provides a simplified interface for common GitHub operations used in wtg over direct octocrab usage.
 /// - Handles authentication via `GITHUB_TOKEN` env var or gh CLI config.
-/// - Supports fallback to anonymous requests when auth fails.
+/// - Supports fallback to anonymous requests on SAML errors via backup client.
 /// - Converts known octocrab errors into `WtgError` variants.
+/// - Returns `None` from `new()` if no client can be created.
 #[derive(Debug)]
 pub struct GitHubClient {
-    auth_client: Option<Octocrab>,
-    anonymous_client: LazyLock<Option<Octocrab>>,
+    main_client: Octocrab,
+    /// Backup client for SAML fallback. Only populated when `main_client` is authenticated.
+    /// When `main_client` is anonymous, there's no point in falling back to another anonymous client.
+    backup_client: LazyLock<Option<Octocrab>>,
+    /// Whether `main_client` is authenticated (vs anonymous).
+    is_authenticated: bool,
 }
 
 /// Information about a Pull Request
@@ -199,22 +204,32 @@ pub struct ReleaseInfo {
     pub prerelease: bool,
 }
 
-impl Default for GitHubClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GitHubClient {
-    /// Create a new GitHub client with authentication
+    /// Create a new GitHub client.
+    ///
+    /// Returns `None` if no client (neither authenticated nor anonymous) can be created.
+    /// If authentication succeeds, an anonymous backup client is created for SAML fallback.
+    /// If authentication fails, the anonymous client becomes the main client with no backup.
     #[must_use]
-    pub fn new() -> Self {
-        let auth_client = Self::build_auth_client();
-
-        Self {
-            auth_client,
-            anonymous_client: LazyLock::new(Self::build_anonymous_client),
+    pub fn new() -> Option<Self> {
+        // Try authenticated client first
+        if let Some(auth) = Self::build_auth_client() {
+            // Auth succeeded - create anonymous as lazy backup for SAML fallback
+            return Some(Self {
+                main_client: auth,
+                backup_client: LazyLock::new(Self::build_anonymous_client),
+                is_authenticated: true,
+            });
         }
+
+        // Auth failed - try anonymous as main
+        // No backup needed: falling back to anonymous when already anonymous is pointless
+        let anonymous = Self::build_anonymous_client()?;
+        Some(Self {
+            main_client: anonymous,
+            backup_client: LazyLock::new(|| None),
+            is_authenticated: false,
+        })
     }
 
     /// Build an authenticated octocrab client
@@ -687,34 +702,38 @@ impl GitHubClient {
         Ok(result)
     }
 
-    /// Call a GitHub API with fallback from authenticated to anonymous client.
+    /// Call a GitHub API with fallback to backup client on SAML errors.
     /// Returns results & the client used, or error.
     async fn call_api_and_get_client<F, T>(&self, api_call: F) -> WtgResult<(T, &Octocrab)>
     where
         for<'a> F: Fn(&'a Octocrab) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
     {
-        // Try with authenticated client first
-        if let Some(client) = self.auth_client.as_ref() {
-            match Self::await_with_timeout_and_error(api_call(client)).await {
-                Ok(result) => return Ok((result, client)),
-                Err(e) if e.is_gh_saml() => {
-                    // Fall through to try anonymous client
-                }
-                Err(e) => {
-                    // Non-SAML error or timeout, don't retry
-                    return Err(e);
-                }
+        // Try with main client first
+        let main_error = match Self::await_with_timeout_and_error(api_call(&self.main_client)).await
+        {
+            Ok(result) => return Ok((result, &self.main_client)),
+            Err(e) if e.is_gh_saml() && self.is_authenticated => {
+                // SAML error with authenticated client - fall through to try backup
+                e
             }
-        }
-
-        // Try with anonymous client (either as fallback or if no authenticated client)
-        let Some(client) = self.anonymous_client.as_ref() else {
-            return Err(WtgError::GhNoClient);
+            Err(e) => {
+                // Non-SAML error, or SAML with anonymous client (no fallback possible)
+                return Err(e);
+            }
         };
 
-        let result = Self::await_with_timeout_and_error(api_call(client)).await?;
+        // Try with backup client on SAML error (only reached if authenticated)
+        let Some(backup) = self.backup_client.as_ref() else {
+            // Backup client failed to build - connection was lost between auth and now
+            return Err(WtgError::GhConnectionLost);
+        };
 
-        Ok((result, client))
+        // Try the backup, but if it also fails with SAML, return original error
+        match Self::await_with_timeout_and_error(api_call(backup)).await {
+            Ok(result) => Ok((result, backup)),
+            Err(e) if e.is_gh_saml() => Err(main_error), // Return original SAML error
+            Err(e) => Err(e),
+        }
     }
 
     /// Await with timeout, returning non-timeout error if any

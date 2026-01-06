@@ -344,8 +344,8 @@ async fn resolve_unknown(backend: &dyn Backend, input: &str) -> WtgResult<Identi
 /// Resolve the best backend based on available resources.
 ///
 /// Decision tree:
-/// 1. Explicit repo info provided → Use cached/cloned repo + GitHub API
-/// 2. In local repo with GitHub remote → Combined backend
+/// 1. Explicit repo info provided → Use cached/cloned repo + GitHub API (or git-only if GitHub client fails)
+/// 2. In local repo with GitHub remote → Combined backend (or git-only if GitHub client fails)
 /// 3. In local repo without remote → Git-only backend
 /// 4. Not in repo and no info → Error
 pub(crate) fn resolve_backend(parsed_input: &ParsedInput) -> WtgResult<Box<dyn Backend>> {
@@ -353,10 +353,13 @@ pub(crate) fn resolve_backend(parsed_input: &ParsedInput) -> WtgResult<Box<dyn B
         // Explicit repo info - use RepoManager for cache handling
         let repo_manager = RepoManager::remote(repo_info.clone())?;
         let git = GitBackend::from_path(repo_manager.path())?;
-        let github = GitHubBackend::new(repo_info.clone());
 
-        // Combined backend with both local and API access
-        return Ok(Box::new(CombinedBackend::new(git, github)));
+        // Try creating GitHub backend, fall back to git-only with warning
+        if let Some(github) = GitHubBackend::new(repo_info.clone()) {
+            return Ok(Box::new(CombinedBackend::new(git, github)));
+        }
+        eprintln!("Warning: GitHub features unavailable (no client could be created)");
+        return Ok(Box::new(git));
     }
 
     // No explicit repo info - must be in local repo
@@ -364,8 +367,11 @@ pub(crate) fn resolve_backend(parsed_input: &ParsedInput) -> WtgResult<Box<dyn B
 
     // Try to find GitHub remote
     if let Some(repo_info) = git.repo_info().cloned() {
-        let github = GitHubBackend::new(repo_info);
-        return Ok(Box::new(CombinedBackend::new(git, github)));
+        // Try GitHub, fall back to git-only with warning
+        if let Some(github) = GitHubBackend::new(repo_info) {
+            return Ok(Box::new(CombinedBackend::new(git, github)));
+        }
+        eprintln!("Warning: GitHub features unavailable (no client could be created)");
     }
 
     // Local git only - no GitHub access

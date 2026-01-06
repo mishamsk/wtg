@@ -76,7 +76,9 @@ pub enum IdentifiedThing {
 
 pub async fn identify(input: &str, git: GitRepo) -> WtgResult<IdentifiedThing> {
     let repo_info = git.github_remote();
-    let github = repo_info.as_ref().map(|_| Arc::new(GitHubClient::new()));
+    let github = repo_info
+        .as_ref()
+        .and_then(|_| GitHubClient::new().map(Arc::new));
 
     // Try as commit hash first
     if let Some(commit_info) = git.find_commit(input) {
