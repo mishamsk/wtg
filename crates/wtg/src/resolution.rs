@@ -1,15 +1,95 @@
 //! Query resolution logic.
 //!
 //! This module contains the orchestration layer that resolves user queries
-//! to identified information using backend implementations.
+//! to identified information using backend implementations. It also defines
+//! the types for representing resolved information.
 
 use crate::backend::Backend;
 use crate::error::{WtgError, WtgResult};
-use crate::identifier::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing};
+use crate::git::{CommitInfo, FileInfo, TagInfo};
+use crate::github::{ExtendedIssueInfo, PullRequestInfo};
 use crate::parse_input::Query;
 
+// ============================================
+// Result types
+// ============================================
+
+/// What the user entered to search for
+#[derive(Debug, Clone)]
+pub enum EntryPoint {
+    Commit(String),         // Hash they entered
+    IssueNumber(u64),       // Issue # they entered
+    PullRequestNumber(u64), // PR # they entered
+    FilePath(String),       // File path they entered
+    Tag(String),            // Tag they entered
+}
+
+/// Information about an Issue
+#[derive(Debug, Clone)]
+pub struct IssueInfo {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: octocrab::models::IssueState,
+    pub url: String,
+    pub author: Option<String>,
+    pub author_url: Option<String>,
+}
+
+impl From<&ExtendedIssueInfo> for IssueInfo {
+    fn from(ext_info: &ExtendedIssueInfo) -> Self {
+        Self {
+            number: ext_info.number,
+            title: ext_info.title.clone(),
+            body: ext_info.body.clone(),
+            state: ext_info.state.clone(),
+            url: ext_info.url.clone(),
+            author: ext_info.author.clone(),
+            author_url: ext_info.author_url.clone(),
+        }
+    }
+}
+
+/// The enriched result of identification - progressively accumulates data
+#[derive(Debug, Clone)]
+pub struct EnrichedInfo {
+    pub entry_point: EntryPoint,
+
+    // Core - the commit (always present for complete results)
+    pub commit: Option<CommitInfo>,
+
+    // Enrichment Layer 1: PR (if this commit came from a PR)
+    pub pr: Option<PullRequestInfo>,
+
+    // Enrichment Layer 2: Issue (if this PR was fixing an issue)
+    pub issue: Option<IssueInfo>,
+
+    // Metadata
+    pub release: Option<TagInfo>,
+}
+
+/// For file results (special case with blame history)
+#[derive(Debug, Clone)]
+pub struct FileResult {
+    pub file_info: FileInfo,
+    pub commit_url: Option<String>,
+    pub author_urls: Vec<Option<String>>,
+    pub release: Option<TagInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub enum IdentifiedThing {
+    Enriched(Box<EnrichedInfo>),
+    File(Box<FileResult>),
+    TagOnly(Box<TagInfo>, Option<String>), // Just a tag, no commit yet
+}
+
+// ============================================
+// Resolution logic
+// ============================================
+
 /// Resolve a query to identified information using the provided backend.
-pub(crate) async fn resolve(backend: &dyn Backend, query: &Query) -> WtgResult<IdentifiedThing> {
+pub async fn resolve(backend: &dyn Backend, query: &Query) -> WtgResult<IdentifiedThing> {
     match query {
         Query::GitCommit(hash) => resolve_commit(backend, hash).await,
         Query::Pr(number) => resolve_pr(backend, *number).await,

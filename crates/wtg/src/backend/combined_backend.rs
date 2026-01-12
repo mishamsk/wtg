@@ -52,13 +52,12 @@ impl CombinedBackend {
         commit_hash: &str,
         commit_date: Option<DateTime<Utc>>,
     ) -> Option<TagInfo> {
-        let manager = self.git.repo_manager();
-        let repo = manager.git_repo();
+        let repo = self.git.git_repo();
         let repo_info = self.github.repo_info()?;
         let client = self.github.client();
 
         // Get local tag candidates (ensure_tags is called internally)
-        let candidates = manager.tags_containing_commit(commit_hash);
+        let candidates = repo.tags_containing_commit(commit_hash);
         let has_semver = candidates.iter().any(TagInfo::is_semver);
 
         // Build timestamp map for sorting
@@ -198,7 +197,7 @@ impl Backend for CombinedBackend {
     }
 
     async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
-        use crate::repo_manager::RepoManager;
+        use crate::git::GitRepo;
 
         // Check if same repo (no cross-project needed)
         if self
@@ -213,10 +212,10 @@ impl Backend for CombinedBackend {
         let github =
             GitHubBackend::with_client(Arc::clone(self.github.client()), repo_info.clone());
 
-        // Try to create RepoManager for cross-project git operations
-        match RepoManager::remote(repo_info.clone()) {
-            Ok(manager) => {
-                let git = GitBackend::new(manager);
+        // Try to create GitRepo for cross-project git operations
+        match GitRepo::remote(repo_info.clone()) {
+            Ok(git_repo) => {
+                let git = GitBackend::new(git_repo);
                 Some(Box::new(Self::new(git, github)))
             }
             Err(e) => {

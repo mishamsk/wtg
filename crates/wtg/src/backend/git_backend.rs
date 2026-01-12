@@ -1,6 +1,6 @@
 //! Pure local git backend implementation.
 //!
-//! This backend wraps a `RepoManager` and provides git-only operations.
+//! This backend wraps a `GitRepo` and provides git-only operations.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -8,33 +8,32 @@ use std::collections::HashMap;
 
 use super::Backend;
 use crate::error::{WtgError, WtgResult};
-use crate::git::{CommitInfo, FileInfo, TagInfo};
+use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{GhRepoInfo, GitHubClient};
-use crate::repo_manager::RepoManager;
 
-/// Pure local git backend wrapping a `RepoManager`.
+/// Pure local git backend wrapping a `GitRepo`.
 ///
-/// Uses `RepoManager` for all operations including smart fetching.
+/// Uses `GitRepo` for all operations including smart fetching.
 /// Cannot access GitHub API, so PR/Issue queries will return `Unsupported`.
-pub(crate) struct GitBackend {
-    manager: RepoManager,
+pub struct GitBackend {
+    repo: GitRepo,
 }
 
 impl GitBackend {
-    /// Create a `GitBackend` from an existing `RepoManager`.
+    /// Create a `GitBackend` from an existing `GitRepo`.
     #[must_use]
-    pub(crate) const fn new(manager: RepoManager) -> Self {
-        Self { manager }
+    pub const fn new(repo: GitRepo) -> Self {
+        Self { repo }
     }
 
-    /// Get a reference to the underlying `RepoManager`.
-    pub(crate) const fn repo_manager(&self) -> &RepoManager {
-        &self.manager
+    /// Get a reference to the underlying `GitRepo`.
+    pub const fn git_repo(&self) -> &GitRepo {
+        &self.repo
     }
 
     /// Find tags containing a commit and pick the best one.
     fn find_best_tag_for_commit(&self, commit_hash: &str) -> Option<TagInfo> {
-        let candidates = self.manager.tags_containing_commit(commit_hash);
+        let candidates = self.repo.tags_containing_commit(commit_hash);
         if candidates.is_empty() {
             return None;
         }
@@ -45,9 +44,7 @@ impl GitBackend {
             .map(|tag| {
                 (
                     tag.commit_hash.clone(),
-                    self.manager
-                        .git_repo()
-                        .get_commit_timestamp(&tag.commit_hash),
+                    self.repo.get_commit_timestamp(&tag.commit_hash),
                 )
             })
             .collect();
@@ -95,7 +92,7 @@ impl GitBackend {
 #[async_trait]
 impl Backend for GitBackend {
     fn repo_info(&self) -> Option<&GhRepoInfo> {
-        self.manager.repo_info()
+        self.repo.repo_info()
     }
 
     // ============================================
@@ -104,17 +101,17 @@ impl Backend for GitBackend {
 
     async fn find_commit(&self, hash: &str) -> WtgResult<CommitInfo> {
         // Use smart find that can fetch on demand
-        self.manager
-            .find_commit_or_fetch(hash)?
+        self.repo
+            .find_commit(hash)?
             .ok_or_else(|| WtgError::NotFound(hash.to_string()))
     }
 
     async fn enrich_commit(&self, mut commit: CommitInfo) -> CommitInfo {
         // Add commit URL if we have repo info
         if commit.commit_url.is_none()
-            && let Some(repo_info) = self.manager.repo_info()
+            && let Some(repo_info) = self.repo.github_remote()
         {
-            commit.commit_url = Some(GitHubClient::commit_url(repo_info, &commit.hash));
+            commit.commit_url = Some(GitHubClient::commit_url(&repo_info, &commit.hash));
         }
         commit
     }
@@ -124,8 +121,7 @@ impl Backend for GitBackend {
     // ============================================
 
     async fn find_file(&self, path: &str) -> WtgResult<FileInfo> {
-        self.manager
-            .git_repo()
+        self.repo
             .find_file(path)
             .ok_or_else(|| WtgError::NotFound(path.to_string()))
     }
@@ -135,8 +131,7 @@ impl Backend for GitBackend {
     // ============================================
 
     async fn find_tag(&self, name: &str) -> WtgResult<TagInfo> {
-        self.manager
-            .git_repo()
+        self.repo
             .get_tags()
             .into_iter()
             .find(|t| t.name == name)
@@ -156,15 +151,15 @@ impl Backend for GitBackend {
     // ============================================
 
     fn commit_url(&self, hash: &str) -> Option<String> {
-        self.manager
-            .repo_info()
-            .map(|ri| GitHubClient::commit_url(ri, hash))
+        self.repo
+            .github_remote()
+            .map(|ri| GitHubClient::commit_url(&ri, hash))
     }
 
     fn tag_url(&self, tag: &str) -> Option<String> {
-        self.manager
-            .repo_info()
-            .map(|ri| GitHubClient::tag_url(ri, tag))
+        self.repo
+            .github_remote()
+            .map(|ri| GitHubClient::tag_url(&ri, tag))
     }
 
     fn author_url_from_email(&self, email: &str) -> Option<String> {

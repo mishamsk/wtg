@@ -22,10 +22,6 @@ pub struct Cli {
     #[arg(short = 'r', long, value_name = "URL")]
     pub repo: Option<String>,
 
-    /// Use the new trait-based backend (temporary flag for migration)
-    #[arg(short = 't', hide = true)]
-    pub use_new_backend: bool,
-
     /// Allow fetching missing refs from remote into local repository
     ///
     /// By default, local repositories don't fetch to avoid unexpected network calls.

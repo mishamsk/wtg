@@ -1,5 +1,5 @@
 use crate::error::WtgResult;
-use crate::identifier::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing};
+use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing};
 use crossterm::style::Stylize;
 
 pub fn display(thing: IdentifiedThing) -> WtgResult<()> {
@@ -239,7 +239,7 @@ fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
 }
 
 /// Display issue information (enrichment layer 2)
-fn display_issue_section(issue: &crate::identifier::IssueInfo) {
+fn display_issue_section(issue: &crate::resolution::IssueInfo) {
     println!("{}", "🐛 The Issue:".red().bold());
     println!(
         "   {} #{}",

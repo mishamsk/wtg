@@ -2,16 +2,21 @@ mod common;
 
 use common::{TestRepoFixture, test_repo};
 use rstest::rstest;
-use wtg_cli::identifier::{EntryPoint, IdentifiedThing, identify};
+use std::path::PathBuf;
+use wtg_cli::backend::GitBackend;
+use wtg_cli::parse_input::Query;
+use wtg_cli::resolution::resolve;
+use wtg_cli::resolution::{EntryPoint, IdentifiedThing};
 
 /// Test identifying a commit by its hash
 #[rstest]
 #[tokio::test]
 async fn test_identify_commit_by_hash(test_repo: TestRepoFixture) {
     let commit_hash = &test_repo.commits.commit0_initial;
+    let backend = GitBackend::new(test_repo.repo);
+    let query = Query::GitCommit(commit_hash.clone());
 
-    // Identify the commit
-    let result = identify(commit_hash, test_repo.repo.clone())
+    let result = resolve(&backend, &query)
         .await
         .expect("Failed to identify commit");
 
@@ -49,9 +54,10 @@ async fn test_identify_commit_by_hash(test_repo: TestRepoFixture) {
 async fn test_identify_commit_by_short_hash(test_repo: TestRepoFixture) {
     // Use short hash of commit 1 (which has v1.0.0 tag)
     let short_hash = &test_repo.commits.commit1_add_file[..7];
+    let backend = GitBackend::new(test_repo.repo);
+    let query = Query::GitCommit(short_hash.to_string());
 
-    // Identify the commit using short hash
-    let result = identify(short_hash, test_repo.repo.clone())
+    let result = resolve(&backend, &query)
         .await
         .expect("Failed to identify commit");
 
@@ -79,8 +85,10 @@ async fn test_identify_commit_by_short_hash(test_repo: TestRepoFixture) {
 #[rstest]
 #[tokio::test]
 async fn test_identify_file(test_repo: TestRepoFixture) {
-    // Identify test.txt
-    let result = identify("test.txt", test_repo.repo.clone())
+    let backend = GitBackend::new(test_repo.repo);
+    let query = Query::FilePath(PathBuf::from("test.txt"));
+
+    let result = resolve(&backend, &query)
         .await
         .expect("Failed to identify file");
 
@@ -115,8 +123,11 @@ async fn test_identify_file(test_repo: TestRepoFixture) {
 #[rstest]
 #[tokio::test]
 async fn test_identify_tag(test_repo: TestRepoFixture) {
-    // Identify v1.0.0 tag
-    let result = identify("v1.0.0", test_repo.repo.clone())
+    let backend = GitBackend::new(test_repo.repo);
+    // Tags are resolved via Unknown query type
+    let query = Query::Unknown("v1.0.0".to_string());
+
+    let result = resolve(&backend, &query)
         .await
         .expect("Failed to identify tag");
 
@@ -140,7 +151,9 @@ async fn test_identify_tag(test_repo: TestRepoFixture) {
 #[rstest]
 #[tokio::test]
 async fn test_identify_nonexistent(test_repo: TestRepoFixture) {
-    let result = identify("nonexistent-thing", test_repo.repo.clone()).await;
+    let backend = GitBackend::new(test_repo.repo);
+    let query = Query::Unknown("nonexistent-thing".to_string());
 
+    let result = resolve(&backend, &query).await;
     assert!(result.is_err());
 }

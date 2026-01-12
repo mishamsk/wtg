@@ -11,24 +11,23 @@ mod git_backend;
 mod github_backend;
 
 pub(crate) use combined_backend::CombinedBackend;
-pub(crate) use git_backend::GitBackend;
+pub use git_backend::GitBackend;
 pub(crate) use github_backend::GitHubBackend;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use crate::error::{WtgError, WtgResult};
-use crate::git::{CommitInfo, FileInfo, TagInfo};
+use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, PullRequestInfo};
 use crate::parse_input::ParsedInput;
-use crate::repo_manager::RepoManager;
 
 /// Unified backend trait for all git/GitHub operations.
 ///
 /// Backends implement methods for operations they support. Default implementations
 /// return `WtgError::Unsupported` for operations not available.
 #[async_trait]
-pub(crate) trait Backend: Send + Sync {
+pub trait Backend: Send + Sync {
     /// Get repository info if known (for URL building, cross-project refs).
     fn repo_info(&self) -> Option<&GhRepoInfo>;
 
@@ -144,15 +143,15 @@ pub(crate) trait Backend: Send + Sync {
 /// 2. In local repo with GitHub remote → Combined backend (or git-only if GitHub client fails)
 /// 3. In local repo without remote → Git-only backend
 /// 4. Not in repo and no info → Error
-pub(crate) fn resolve_backend(
+pub fn resolve_backend(
     parsed_input: &ParsedInput,
     allow_user_repo_fetch: bool,
 ) -> WtgResult<Box<dyn Backend>> {
     if let Some(repo_info) = parsed_input.gh_repo_info() {
-        // Explicit repo info - use RepoManager for cache handling
+        // Explicit repo info - use GitRepo::remote for cache handling
         // Remote repos always allow fetching to keep cache fresh
-        let repo_manager = RepoManager::remote(repo_info.clone())?;
-        let git = GitBackend::new(repo_manager);
+        let git_repo = GitRepo::remote(repo_info.clone())?;
+        let git = GitBackend::new(git_repo);
 
         // Try creating GitHub backend, fall back to git-only with warning
         if let Some(github) = GitHubBackend::new(repo_info.clone()) {
@@ -163,14 +162,14 @@ pub(crate) fn resolve_backend(
     }
 
     // No explicit repo info - must be in local repo
-    let mut repo_manager = RepoManager::local()?;
+    let mut git_repo = GitRepo::open()?;
 
     // Only allow fetching into user's repo if explicitly requested via --fetch
     if allow_user_repo_fetch {
-        repo_manager.set_allow_fetch(true);
+        git_repo.set_allow_fetch(true);
     }
 
-    let git = GitBackend::new(repo_manager);
+    let git = GitBackend::new(git_repo);
 
     // Try to find GitHub remote
     if let Some(repo_info) = git.repo_info().cloned() {

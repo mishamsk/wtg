@@ -2,15 +2,40 @@ use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
 use crate::parse_input::parse_github_repo_url;
 use chrono::{DateTime, TimeZone, Utc};
-use git2::{Commit, Oid, Repository};
+use git2::{Commit, FetchOptions, Oid, RemoteCallbacks, Repository};
 use regex::Regex;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, LazyLock, Mutex};
 
-#[derive(Clone)]
+/// Tracks what data has been synchronized from remote.
+///
+/// This helps avoid redundant network calls:
+/// - If `full_metadata_synced`, we've done a filter clone or full fetch, so all refs are known
+/// - If a commit is in `fetched_commits`, we've already fetched it individually
+/// - If `tags_synced`, we've fetched all tags
+#[derive(Default)]
+struct FetchState {
+    /// True if we did a full metadata fetch (filter clone or fetch --all)
+    full_metadata_synced: bool,
+    /// Specific commits we've fetched individually
+    fetched_commits: HashSet<String>,
+    /// True if we've fetched all tags
+    tags_synced: bool,
+}
+
 pub struct GitRepo {
     repo: Arc<Mutex<Repository>>,
     path: PathBuf,
+    /// Remote URL for fetching
+    remote_url: Option<String>,
+    /// Repository info (owner/repo) if explicitly set
+    repo_info: Option<GhRepoInfo>,
+    /// Whether fetching is allowed
+    allow_fetch: bool,
+    /// Tracks what's been synced from remote
+    fetch_state: Mutex<FetchState>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,24 +102,92 @@ pub struct SemverInfo {
 }
 
 impl GitRepo {
-    /// Open the git repository from the current directory
+    /// Open the git repository from the current directory.
+    /// Fetch is disabled by default for local repos.
     pub fn open() -> WtgResult<Self> {
         let repo = Repository::discover(".").map_err(|_| WtgError::NotInGitRepo)?;
         let path = repo.path().to_path_buf();
+        let remote_url = Self::extract_remote_url(&repo);
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
             path,
+            remote_url,
+            repo_info: None,
+            allow_fetch: false,
+            fetch_state: Mutex::new(FetchState::default()),
         })
     }
 
-    /// Open the git repository from a specific path
+    /// Open the git repository from a specific path.
+    /// Fetch is disabled by default.
     pub fn from_path(path: &Path) -> WtgResult<Self> {
         let repo = Repository::open(path).map_err(|_| WtgError::NotInGitRepo)?;
         let repo_path = repo.path().to_path_buf();
+        let remote_url = Self::extract_remote_url(&repo);
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
             path: repo_path,
+            remote_url,
+            repo_info: None,
+            allow_fetch: false,
+            fetch_state: Mutex::new(FetchState::default()),
         })
+    }
+
+    /// Open or clone a remote GitHub repository.
+    /// Uses a cache directory (~/.cache/wtg/repos). Fetch is enabled by default.
+    pub fn remote(repo_info: GhRepoInfo) -> WtgResult<Self> {
+        let cache_dir = get_cache_dir()?;
+        let repo_cache_path = cache_dir.join(format!("{}/{}", repo_info.owner(), repo_info.repo()));
+
+        // Check if already cloned
+        let full_metadata_synced =
+            if repo_cache_path.exists() && Repository::open(&repo_cache_path).is_ok() {
+                // Cache exists - try to fetch to ensure metadata is fresh
+                match update_remote_repo(&repo_cache_path) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("⚠️  Failed to update cached repo: {e}");
+                        false // Continue with stale cache
+                    }
+                }
+            } else {
+                // Clone it (with filter=blob:none for efficiency)
+                clone_remote_repo(repo_info.owner(), repo_info.repo(), &repo_cache_path)?;
+                true // Fresh clone has all metadata
+            };
+
+        let repo = Repository::open(&repo_cache_path).map_err(|_| WtgError::NotInGitRepo)?;
+        let path = repo.path().to_path_buf();
+        let remote_url = Some(format!(
+            "https://github.com/{}/{}.git",
+            repo_info.owner(),
+            repo_info.repo()
+        ));
+
+        Ok(Self {
+            repo: Arc::new(Mutex::new(repo)),
+            path,
+            remote_url,
+            repo_info: Some(repo_info),
+            allow_fetch: true,
+            fetch_state: Mutex::new(FetchState {
+                full_metadata_synced,
+                ..Default::default()
+            }),
+        })
+    }
+
+    /// Extract remote URL from repository (origin or upstream)
+    fn extract_remote_url(repo: &Repository) -> Option<String> {
+        for remote_name in ["origin", "upstream"] {
+            if let Ok(remote) = repo.find_remote(remote_name)
+                && let Some(url) = remote.url()
+            {
+                return Some(url.to_string());
+            }
+        }
+        None
     }
 
     /// Get the repository path
@@ -103,25 +196,27 @@ impl GitRepo {
         &self.path
     }
 
-    /// Check if this is a shallow repository
-    #[must_use]
-    pub fn is_shallow(&self) -> bool {
+    /// Check if this is a shallow repository (internal use only)
+    fn is_shallow(&self) -> bool {
         self.with_repo(git2::Repository::is_shallow)
     }
 
-    /// Get the remote URL for origin or upstream (for fetching)
+    /// Get the remote URL for fetching
     #[must_use]
-    pub fn remote_url(&self) -> Option<String> {
-        self.with_repo(|repo| {
-            for remote_name in ["origin", "upstream"] {
-                if let Ok(remote) = repo.find_remote(remote_name)
-                    && let Some(url) = remote.url()
-                {
-                    return Some(url.to_string());
-                }
-            }
-            None
-        })
+    pub fn remote_url(&self) -> Option<&str> {
+        self.remote_url.as_deref()
+    }
+
+    /// Set whether fetching is allowed.
+    /// Use this to enable `--fetch` flag for local repos.
+    pub const fn set_allow_fetch(&mut self, allow: bool) {
+        self.allow_fetch = allow;
+    }
+
+    /// Get a reference to the stored repo info (owner/repo) if explicitly set.
+    #[must_use]
+    pub const fn repo_info(&self) -> Option<&GhRepoInfo> {
+        self.repo_info.as_ref()
     }
 
     fn with_repo<T>(&self, f: impl FnOnce(&Repository) -> T) -> T {
@@ -129,9 +224,72 @@ impl GitRepo {
         f(&repo)
     }
 
-    /// Try to find a commit by hash (can be short or full)
+    /// Find a commit by hash (can be short or full).
+    /// If `allow_fetch` is true and the commit isn't found locally, attempts to fetch it.
+    pub fn find_commit(&self, hash_str: &str) -> WtgResult<Option<CommitInfo>> {
+        // 1. Try local first
+        if let Some(commit) = self.find_commit_local(hash_str) {
+            return Ok(Some(commit));
+        }
+
+        // 2. If we've already synced all metadata, commit doesn't exist
+        {
+            let state = self.fetch_state.lock().expect("fetch state mutex poisoned");
+            if state.full_metadata_synced {
+                return Ok(None);
+            }
+            // Check if we've already tried to fetch this commit
+            if state.fetched_commits.contains(hash_str) {
+                return Ok(None);
+            }
+        }
+
+        // 3. If fetch not allowed, return None
+        if !self.allow_fetch {
+            return Ok(None);
+        }
+
+        // 4. For shallow repos, warn and prefer API fallback to avoid huge downloads
+        if self.is_shallow() {
+            eprintln!(
+                "⚠️  Shallow repository detected: using API for commit lookup (use --fetch to override)"
+            );
+            return Ok(None);
+        }
+
+        // 5. Need remote URL to fetch
+        let Some(remote_url) = &self.remote_url else {
+            return Ok(None);
+        };
+
+        // 6. Check ls-remote before fetching (avoid downloading if ref doesn't exist)
+        if !ls_remote_ref_exists(remote_url, hash_str)? {
+            // Mark as fetched (attempted) so we don't retry
+            self.fetch_state
+                .lock()
+                .expect("fetch state mutex poisoned")
+                .fetched_commits
+                .insert(hash_str.to_string());
+            return Ok(None);
+        }
+
+        // 7. Fetch the specific commit
+        fetch_commit(&self.path, remote_url, hash_str)?;
+
+        // 8. Mark as fetched
+        self.fetch_state
+            .lock()
+            .expect("fetch state mutex poisoned")
+            .fetched_commits
+            .insert(hash_str.to_string());
+
+        // 9. Retry local lookup
+        Ok(self.find_commit_local(hash_str))
+    }
+
+    /// Find a commit by hash locally only (no fetch).
     #[must_use]
-    pub fn find_commit(&self, hash_str: &str) -> Option<CommitInfo> {
+    fn find_commit_local(&self, hash_str: &str) -> Option<CommitInfo> {
         self.with_repo(|repo| {
             if let Ok(oid) = Oid::from_str(hash_str)
                 && let Ok(commit) = repo.find_commit(oid)
@@ -281,14 +439,44 @@ impl GitRepo {
     }
 
     /// Expose tags that contain the specified commit.
-    #[must_use]
+    /// If `allow_fetch` is true, ensures tags are fetched first.
     pub fn tags_containing_commit(&self, commit_hash: &str) -> Vec<TagInfo> {
+        // Ensure tags are available (fetches if needed)
+        let _ = self.ensure_tags();
+
         let Ok(commit_oid) = Oid::from_str(commit_hash) else {
             return Vec::new();
         };
 
         self.find_tags_containing_commit(commit_oid)
             .unwrap_or_default()
+    }
+
+    /// Ensure all tags are available (fetches if needed).
+    fn ensure_tags(&self) -> WtgResult<()> {
+        {
+            let state = self.fetch_state.lock().expect("fetch state mutex poisoned");
+            if state.tags_synced || state.full_metadata_synced {
+                return Ok(());
+            }
+        }
+
+        if !self.allow_fetch {
+            return Ok(()); // Don't fetch if not allowed
+        }
+
+        let Some(remote_url) = &self.remote_url else {
+            return Ok(()); // No remote to fetch from
+        };
+
+        fetch_tags(&self.path, remote_url)?;
+
+        self.fetch_state
+            .lock()
+            .expect("fetch state mutex poisoned")
+            .tags_synced = true;
+
+        Ok(())
     }
 
     /// Convert a GitHub release into tag metadata if the tag exists locally.
@@ -396,9 +584,16 @@ impl GitRepo {
         })
     }
 
-    /// Get the GitHub remote URL if it exists (checks all remotes)
+    /// Get the GitHub remote info.
+    /// Returns stored `repo_info` if set, otherwise extracts from git remotes.
     #[must_use]
     pub fn github_remote(&self) -> Option<GhRepoInfo> {
+        // Return stored repo_info if explicitly set (e.g., from remote() constructor)
+        if let Some(info) = &self.repo_info {
+            return Some(info.clone());
+        }
+
+        // Otherwise, extract from git remotes
         self.with_repo(|repo| {
             for remote_name in ["upstream", "origin"] {
                 if let Ok(remote) = repo.find_remote(remote_name)
@@ -551,6 +746,250 @@ pub fn parse_semver(tag: &str) -> Option<SemverInfo> {
 #[must_use]
 pub fn git_time_to_datetime(time: git2::Time) -> DateTime<Utc> {
     Utc.timestamp_opt(time.seconds(), 0).unwrap()
+}
+
+// ========================================
+// Remote/cache helper functions
+// ========================================
+
+/// Get the cache directory for remote repositories
+fn get_cache_dir() -> WtgResult<PathBuf> {
+    let cache_dir = dirs::cache_dir()
+        .ok_or_else(|| {
+            WtgError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Could not determine cache directory",
+            ))
+        })?
+        .join("wtg")
+        .join("repos");
+
+    if !cache_dir.exists() {
+        std::fs::create_dir_all(&cache_dir)?;
+    }
+
+    Ok(cache_dir)
+}
+
+/// Clone a remote repository using subprocess with filter=blob:none, falling back to git2 if needed
+fn clone_remote_repo(owner: &str, repo: &str, target_path: &Path) -> WtgResult<()> {
+    // Create parent directory
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let repo_url = format!("https://github.com/{owner}/{repo}.git");
+
+    eprintln!("🔄 Cloning remote repository {repo_url}...");
+
+    // Try subprocess with --filter=blob:none first (requires Git 2.17+)
+    match clone_with_filter(&repo_url, target_path) {
+        Ok(()) => {
+            eprintln!("✅ Repository cloned successfully (using filter)");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("⚠️  Filter clone failed ({e}), falling back to bare clone...");
+            // Fall back to git2 bare clone
+            clone_bare_with_git2(&repo_url, target_path)
+        }
+    }
+}
+
+/// Clone with --filter=blob:none using subprocess
+fn clone_with_filter(repo_url: &str, target_path: &Path) -> WtgResult<()> {
+    let output = Command::new("git")
+        .args([
+            "clone",
+            "--filter=blob:none", // Don't download blobs until needed (Git 2.17+)
+            "--bare",             // Bare repository (no working directory)
+            repo_url,
+            target_path.to_str().ok_or_else(|| {
+                WtgError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid path",
+                ))
+            })?,
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(WtgError::Io(std::io::Error::other(format!(
+            "Failed to clone with filter: {error}"
+        ))));
+    }
+
+    Ok(())
+}
+
+/// Clone bare repository using git2 (fallback)
+fn clone_bare_with_git2(repo_url: &str, target_path: &Path) -> WtgResult<()> {
+    // Clone without progress output for cleaner UX
+    let callbacks = RemoteCallbacks::new();
+
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+
+    // Build the repository with options
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_options);
+    builder.bare(true); // Bare repository - no working directory, only git metadata
+
+    // Clone the repository as bare
+    // This gets all commits, branches, and tags without checking out files
+    builder.clone(repo_url, target_path)?;
+
+    eprintln!("✅ Repository cloned successfully (using bare clone)");
+
+    Ok(())
+}
+
+/// Update an existing cloned remote repository
+fn update_remote_repo(repo_path: &Path) -> WtgResult<()> {
+    eprintln!("🔄 Updating cached repository...");
+
+    // Try subprocess fetch first (works for both filter and non-filter repos)
+    match fetch_with_subprocess(repo_path) {
+        Ok(()) => {
+            eprintln!("✅ Repository updated");
+            Ok(())
+        }
+        Err(_) => {
+            // Fall back to git2
+            fetch_with_git2(repo_path)
+        }
+    }
+}
+
+/// Fetch updates using subprocess
+fn fetch_with_subprocess(repo_path: &Path) -> WtgResult<()> {
+    let args = build_fetch_args(repo_path)?;
+
+    let output = Command::new("git").args(&args).output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(WtgError::Io(std::io::Error::other(format!(
+            "Failed to fetch: {error}"
+        ))));
+    }
+
+    Ok(())
+}
+
+/// Build the arguments passed to `git fetch` when refreshing cached repos.
+fn build_fetch_args(repo_path: &Path) -> WtgResult<Vec<String>> {
+    let repo_path = repo_path.to_str().ok_or_else(|| {
+        WtgError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid path",
+        ))
+    })?;
+
+    Ok(vec![
+        "-C".to_string(),
+        repo_path.to_string(),
+        "fetch".to_string(),
+        "--all".to_string(),
+        "--tags".to_string(),
+        "--force".to_string(),
+        "--prune".to_string(),
+    ])
+}
+
+/// Fetch updates using git2 (fallback)
+fn fetch_with_git2(repo_path: &Path) -> WtgResult<()> {
+    let repo = Repository::open(repo_path)?;
+
+    // Find the origin remote
+    let mut remote = repo
+        .find_remote("origin")
+        .or_else(|_| repo.find_remote("upstream"))
+        .map_err(WtgError::Git)?;
+
+    // Fetch without progress output for cleaner UX
+    let callbacks = RemoteCallbacks::new();
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+
+    // Fetch all refs
+    remote.fetch(
+        &["refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"],
+        Some(&mut fetch_options),
+        None,
+    )?;
+
+    eprintln!("✅ Repository updated");
+
+    Ok(())
+}
+
+/// Check if a ref exists on remote without fetching (git ls-remote).
+fn ls_remote_ref_exists(remote_url: &str, ref_spec: &str) -> WtgResult<bool> {
+    let output = Command::new("git")
+        .args(["ls-remote", "--exit-code", remote_url, ref_spec])
+        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status();
+
+    match output {
+        Ok(status) => Ok(status.success()),
+        Err(e) => Err(WtgError::Io(e)),
+    }
+}
+
+/// Fetch a specific commit by hash.
+fn fetch_commit(repo_path: &Path, remote_url: &str, hash: &str) -> WtgResult<()> {
+    let repo_path_str = repo_path.to_str().ok_or_else(|| {
+        WtgError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid path",
+        ))
+    })?;
+
+    let output = Command::new("git")
+        .args(["-C", repo_path_str, "fetch", "--depth=1", remote_url, hash])
+        .output()?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(WtgError::Io(std::io::Error::other(format!(
+            "Failed to fetch commit {hash}: {stderr}"
+        ))))
+    }
+}
+
+/// Fetch all tags from remote.
+fn fetch_tags(repo_path: &Path, remote_url: &str) -> WtgResult<()> {
+    let repo_path_str = repo_path.to_str().ok_or_else(|| {
+        WtgError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid path",
+        ))
+    })?;
+
+    let output = Command::new("git")
+        .args([
+            "-C",
+            repo_path_str,
+            "fetch",
+            "--tags",
+            "--force",
+            remote_url,
+        ])
+        .output()?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(WtgError::Io(std::io::Error::other(format!(
+            "Failed to fetch tags: {stderr}"
+        ))))
+    }
 }
 
 #[cfg(test)]

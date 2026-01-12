@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Query {
+pub enum Query {
     /// A Git commit hash
     GitCommit(String),
     /// Either a GitHub issue or a pull request number
@@ -26,7 +26,7 @@ pub(crate) enum Query {
 
 /// Parsed input that can come from either the input argument or a GitHub URL
 #[derive(Debug, Clone)]
-pub(crate) struct ParsedInput {
+pub struct ParsedInput {
     gh_repo_info: Option<GhRepoInfo>,
     query: Query,
 }
@@ -39,7 +39,9 @@ impl ParsedInput {
         }
     }
 
-    const fn new_local_query(query: Query) -> Self {
+    /// Create a `ParsedInput` for a local query (no remote repo info).
+    #[must_use]
+    pub const fn new_local_query(query: Query) -> Self {
         Self {
             gh_repo_info: None,
             query,
@@ -47,25 +49,13 @@ impl ParsedInput {
     }
 
     #[must_use]
-    pub(crate) const fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
+    pub const fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
         self.gh_repo_info.as_ref()
     }
 
     #[must_use]
-    pub(crate) const fn query(&self) -> &Query {
+    pub const fn query(&self) -> &Query {
         &self.query
-    }
-
-    /// Convert query to string for legacy identifier code
-    /// This is a temporary bridge until identifier is refactored to use Query directly
-    #[must_use]
-    pub(crate) fn query_as_string(&self) -> String {
-        match &self.query {
-            Query::GitCommit(hash) => hash.clone(),
-            Query::IssueOrPr(num) | Query::Issue(num) | Query::Pr(num) => format!("#{num}"),
-            Query::FilePath(path) => path.to_string_lossy().to_string(),
-            Query::Unknown(s) => s.clone(),
-        }
     }
 
     #[cfg(test)]

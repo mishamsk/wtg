@@ -7,16 +7,13 @@ pub mod error;
 pub mod git;
 pub mod github;
 pub mod help;
-pub mod identifier;
 pub mod output;
-pub(crate) mod parse_input;
+pub mod parse_input;
 pub mod remote;
-pub mod repo_manager;
-mod resolution;
+pub mod resolution;
 
 use cli::Cli;
 use error::{WtgError, WtgResult};
-use repo_manager::RepoManager;
 
 /// Run the CLI using the process arguments.
 pub fn run() -> WtgResult<()> {
@@ -62,58 +59,14 @@ fn run_with_cli(cli: Cli) -> WtgResult<()> {
 }
 
 async fn run_async(cli: Cli) -> WtgResult<()> {
-    // Parse the input to determine if it's a remote repo or local
-    let parsed_input = cli.parse_input()?;
-
-    // Use new backend path if -t flag is set
-    if cli.use_new_backend {
-        return run_with_new_backend(parsed_input, cli.fetch).await;
-    }
-
-    // Create the appropriate repo manager
-    let repo_manager = if let Some(gh_repo_info) = parsed_input.gh_repo_info() {
-        RepoManager::remote(gh_repo_info.clone())?
-    } else {
-        RepoManager::local()?
-    };
-
-    // Get the git repo instance
-    let git_repo = repo_manager.git_repo().clone();
-
-    // Determine the remote info - either from the repo manager or from the local repo's remotes
-    let remote_info = repo_manager
-        .repo_info()
-        .cloned()
-        .or_else(|| git_repo.github_remote());
-
-    // Print snarky messages if no GitHub remote (only for local repos)
-    if remote_info.is_none() {
-        remote::check_remote_and_snark(git_repo.path());
-    }
-
-    // Detect what type of input we have
-    let result = Box::pin(identifier::identify(
-        parsed_input.query_as_string().as_str(),
-        git_repo,
-    ))
-    .await?;
-
-    // Display the result
-    output::display(result)?;
-
-    Ok(())
-}
-
-/// Run using the new trait-based backend architecture.
-async fn run_with_new_backend(
-    parsed_input: parse_input::ParsedInput,
-    allow_user_repo_fetch: bool,
-) -> WtgResult<()> {
     use backend::resolve_backend;
     use resolution::resolve;
 
+    // Parse the input to determine if it's a remote repo or local
+    let parsed_input = cli.parse_input()?;
+
     // Create the backend based on available resources
-    let backend = resolve_backend(&parsed_input, allow_user_repo_fetch)?;
+    let backend = resolve_backend(&parsed_input, cli.fetch)?;
 
     // Print snarky messages if no GitHub remote (only for local repos with git-only backend)
     if backend.repo_info().is_none()
@@ -125,7 +78,7 @@ async fn run_with_new_backend(
     // Resolve the query using the backend
     let result = resolve(backend.as_ref(), parsed_input.query()).await?;
 
-    // Display the result (same output code works with both paths)
+    // Display the result
     output::display(result)?;
 
     Ok(())

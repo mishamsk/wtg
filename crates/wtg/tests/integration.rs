@@ -4,17 +4,21 @@
 /// To run these tests:
 /// - Locally: `just test-integration`
 /// - CI: automatically included in the `ci` profile
-use wtg_cli::git::GitRepo;
-use wtg_cli::identifier::{IdentifiedThing, identify};
+use std::path::PathBuf;
+use wtg_cli::backend::resolve_backend;
+use wtg_cli::parse_input::{ParsedInput, Query};
+use wtg_cli::resolution::IdentifiedThing;
+use wtg_cli::resolution::resolve;
 
 /// Test identifying a recent commit from the actual wtg repository
 #[tokio::test]
 async fn integration_identify_recent_commit() {
-    // Open the actual wtg repository
-    let repo = GitRepo::open().expect("Failed to open wtg repository");
-
     // Identify a known commit (from git log)
-    let result = identify("6146f62054c1eb14792be673275f8bc9a2e223f3", repo)
+    let query = Query::GitCommit("6146f62054c1eb14792be673275f8bc9a2e223f3".to_string());
+    let parsed_input = ParsedInput::new_local_query(query.clone());
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+
+    let result = resolve(backend.as_ref(), &query)
         .await
         .expect("Failed to identify commit");
 
@@ -27,10 +31,12 @@ async fn integration_identify_recent_commit() {
 async fn integration_identify_tag() {
     const TAG_NAME: &str = "v0.1.0";
 
-    let repo = GitRepo::open().expect("Failed to open wtg repository");
-
     // Identify the first tag
-    let result = identify(TAG_NAME, repo)
+    let query = Query::Unknown(TAG_NAME.to_string());
+    let parsed_input = ParsedInput::new_local_query(query.clone());
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+
+    let result = resolve(backend.as_ref(), &query)
         .await
         .expect("Failed to identify tag");
 
@@ -41,10 +47,12 @@ async fn integration_identify_tag() {
 /// Test identifying a file from the actual wtg repository
 #[tokio::test]
 async fn integration_identify_file() {
-    let repo = GitRepo::open().expect("Failed to open wtg repository");
-
     // Identify LICENSE (which should not change)
-    let result = identify("LICENSE", repo)
+    let query = Query::FilePath(PathBuf::from("LICENSE"));
+    let parsed_input = ParsedInput::new_local_query(query.clone());
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+
+    let result = resolve(backend.as_ref(), &query)
         .await
         .expect("Failed to identify LICENSE");
 
