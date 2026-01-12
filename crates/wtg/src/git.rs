@@ -1,13 +1,19 @@
-use crate::error::{WtgError, WtgResult};
-use crate::github::{GhRepoInfo, ReleaseInfo};
-use crate::parse_input::parse_github_repo_url;
+use std::{
+    collections::HashSet,
+    fs,
+    io::{Error as IoError, ErrorKind},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{Arc, LazyLock, Mutex},
+};
+
 use chrono::{DateTime, TimeZone, Utc};
 use git2::{Commit, FetchOptions, Oid, RemoteCallbacks, Repository};
 use regex::Regex;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex};
+
+use crate::error::{WtgError, WtgResult};
+use crate::github::{GhRepoInfo, ReleaseInfo};
+use crate::parse_input::parse_github_repo_url;
 
 /// Tracks what data has been synchronized from remote.
 ///
@@ -756,8 +762,8 @@ pub fn git_time_to_datetime(time: git2::Time) -> DateTime<Utc> {
 fn get_cache_dir() -> WtgResult<PathBuf> {
     let cache_dir = dirs::cache_dir()
         .ok_or_else(|| {
-            WtgError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
+            WtgError::Io(IoError::new(
+                ErrorKind::NotFound,
                 "Could not determine cache directory",
             ))
         })?
@@ -765,7 +771,7 @@ fn get_cache_dir() -> WtgResult<PathBuf> {
         .join("repos");
 
     if !cache_dir.exists() {
-        std::fs::create_dir_all(&cache_dir)?;
+        fs::create_dir_all(&cache_dir)?;
     }
 
     Ok(cache_dir)
@@ -775,7 +781,7 @@ fn get_cache_dir() -> WtgResult<PathBuf> {
 fn clone_remote_repo(owner: &str, repo: &str, target_path: &Path) -> WtgResult<()> {
     // Create parent directory
     if let Some(parent) = target_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
 
     let repo_url = format!("https://github.com/{owner}/{repo}.git");
@@ -805,17 +811,14 @@ fn clone_with_filter(repo_url: &str, target_path: &Path) -> WtgResult<()> {
             "--bare",             // Bare repository (no working directory)
             repo_url,
             target_path.to_str().ok_or_else(|| {
-                WtgError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Invalid path",
-                ))
+                WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path"))
             })?,
         ])
         .output()?;
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
-        return Err(WtgError::Io(std::io::Error::other(format!(
+        return Err(WtgError::Io(IoError::other(format!(
             "Failed to clone with filter: {error}"
         ))));
     }
@@ -870,7 +873,7 @@ fn fetch_with_subprocess(repo_path: &Path) -> WtgResult<()> {
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
-        return Err(WtgError::Io(std::io::Error::other(format!(
+        return Err(WtgError::Io(IoError::other(format!(
             "Failed to fetch: {error}"
         ))));
     }
@@ -880,12 +883,9 @@ fn fetch_with_subprocess(repo_path: &Path) -> WtgResult<()> {
 
 /// Build the arguments passed to `git fetch` when refreshing cached repos.
 fn build_fetch_args(repo_path: &Path) -> WtgResult<Vec<String>> {
-    let repo_path = repo_path.to_str().ok_or_else(|| {
-        WtgError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Invalid path",
-        ))
-    })?;
+    let repo_path = repo_path
+        .to_str()
+        .ok_or_else(|| WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path")))?;
 
     Ok(vec![
         "-C".to_string(),
@@ -929,8 +929,8 @@ fn fetch_with_git2(repo_path: &Path) -> WtgResult<()> {
 fn ls_remote_ref_exists(remote_url: &str, ref_spec: &str) -> WtgResult<bool> {
     let output = Command::new("git")
         .args(["ls-remote", "--exit-code", remote_url, ref_spec])
-        .stderr(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::null())
         .status();
 
     match output {
@@ -941,12 +941,9 @@ fn ls_remote_ref_exists(remote_url: &str, ref_spec: &str) -> WtgResult<bool> {
 
 /// Fetch a specific commit by hash.
 fn fetch_commit(repo_path: &Path, remote_url: &str, hash: &str) -> WtgResult<()> {
-    let repo_path_str = repo_path.to_str().ok_or_else(|| {
-        WtgError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Invalid path",
-        ))
-    })?;
+    let repo_path_str = repo_path
+        .to_str()
+        .ok_or_else(|| WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path")))?;
 
     let output = Command::new("git")
         .args(["-C", repo_path_str, "fetch", "--depth=1", remote_url, hash])
@@ -956,7 +953,7 @@ fn fetch_commit(repo_path: &Path, remote_url: &str, hash: &str) -> WtgResult<()>
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(WtgError::Io(std::io::Error::other(format!(
+        Err(WtgError::Io(IoError::other(format!(
             "Failed to fetch commit {hash}: {stderr}"
         ))))
     }
@@ -964,12 +961,9 @@ fn fetch_commit(repo_path: &Path, remote_url: &str, hash: &str) -> WtgResult<()>
 
 /// Fetch all tags from remote.
 fn fetch_tags(repo_path: &Path, remote_url: &str) -> WtgResult<()> {
-    let repo_path_str = repo_path.to_str().ok_or_else(|| {
-        WtgError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Invalid path",
-        ))
-    })?;
+    let repo_path_str = repo_path
+        .to_str()
+        .ok_or_else(|| WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path")))?;
 
     let output = Command::new("git")
         .args([
@@ -986,7 +980,7 @@ fn fetch_tags(repo_path: &Path, remote_url: &str) -> WtgResult<()> {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(WtgError::Io(std::io::Error::other(format!(
+        Err(WtgError::Io(IoError::other(format!(
             "Failed to fetch tags: {stderr}"
         ))))
     }
@@ -994,9 +988,9 @@ fn fetch_tags(repo_path: &Path, remote_url: &str) -> WtgResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs;
     use tempfile::tempdir;
+
+    use super::*;
 
     /// Check if a tag name is a semantic version
     fn is_semver_tag(tag: &str) -> bool {

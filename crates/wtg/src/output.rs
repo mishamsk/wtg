@@ -1,6 +1,12 @@
-use crate::error::WtgResult;
-use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing};
+use std::collections::HashSet;
+
 use crossterm::style::Stylize;
+use octocrab::models::IssueState;
+
+use crate::error::WtgResult;
+use crate::git::{CommitInfo, TagInfo};
+use crate::github::PullRequestInfo;
+use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing, IssueInfo};
 
 pub fn display(thing: IdentifiedThing) -> WtgResult<()> {
     match thing {
@@ -15,7 +21,7 @@ pub fn display(thing: IdentifiedThing) -> WtgResult<()> {
 }
 
 /// Display tag with humor - tags aren't supported yet
-fn display_tag_warning(tag_info: crate::git::TagInfo, github_url: Option<String>) {
+fn display_tag_warning(tag_info: TagInfo, github_url: Option<String>) {
     println!(
         "{} {}",
         "🏷️  Found tag:".green().bold(),
@@ -161,10 +167,7 @@ fn display_identification(entry_point: &EntryPoint) {
 }
 
 /// Display commit information (the core section, always present when resolved)
-fn display_commit_section(
-    commit_info: &crate::git::CommitInfo,
-    pr: Option<&crate::github::PullRequestInfo>,
-) {
+fn display_commit_section(commit_info: &CommitInfo, pr: Option<&PullRequestInfo>) {
     let commit_url = commit_info.commit_url.as_deref();
     let author_url = commit_info.author_url.as_deref();
 
@@ -207,7 +210,7 @@ fn display_commit_section(
 }
 
 /// Display PR information (enrichment layer 1)
-fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
+fn display_pr_section(pr: &PullRequestInfo, is_fix: bool) {
     println!("{}", "🔀 The Pull Request:".magenta().bold());
     println!(
         "   {} #{}",
@@ -239,7 +242,7 @@ fn display_pr_section(pr: &crate::github::PullRequestInfo, is_fix: bool) {
 }
 
 /// Display issue information (enrichment layer 2)
-fn display_issue_section(issue: &crate::resolution::IssueInfo) {
+fn display_issue_section(issue: &IssueInfo) {
     println!("{}", "🐛 The Issue:".red().bold());
     println!(
         "   {} #{}",
@@ -274,12 +277,12 @@ fn display_missing_info(info: &EnrichedInfo) {
         && info.pr.is_none()
     {
         let message = if info.commit.is_none() {
-            if issue.state == octocrab::models::IssueState::Closed {
+            if issue.state == IssueState::Closed {
                 "🔍 Issue closed, but the trail's cold. Some stealthy hero dropped a fix and vanished without a PR."
             } else {
                 "🔍 Couldn't trace this issue, still open. Waiting for a brave soul to pick it up..."
             }
-        } else if issue.state == octocrab::models::IssueState::Closed {
+        } else if issue.state == IssueState::Closed {
             "🤷 Issue closed, but no PR found... Some stealthy hero dropped a fix and vanished without a PR."
         } else {
             "🤷 No PR found for this issue... still hunting for the fix!"
@@ -417,7 +420,7 @@ fn display_file(file_result: FileResult) {
     // Previous authors - snarky hall of shame (deduplicated)
     if !info.previous_authors.is_empty() {
         // Deduplicate authors - track who we've seen
-        let mut seen_authors = std::collections::HashSet::new();
+        let mut seen_authors = HashSet::new();
         seen_authors.insert(last_author_name.clone()); // Skip the last commit author
 
         let unique_authors: Vec<_> = info
@@ -454,7 +457,7 @@ fn display_file(file_result: FileResult) {
     display_release_info(file_result.release, file_result.commit_url.as_deref());
 }
 
-fn display_release_info(release: Option<crate::git::TagInfo>, commit_url: Option<&str>) {
+fn display_release_info(release: Option<TagInfo>, commit_url: Option<&str>) {
     println!("{}", "📦 First shipped in:".magenta().bold());
 
     match release {

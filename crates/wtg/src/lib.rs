@@ -1,4 +1,11 @@
+use std::{env, ffi::OsString};
+
 use clap::Parser;
+
+use crate::backend::resolve_backend;
+use crate::cli::Cli;
+use crate::error::{WtgError, WtgResult};
+use crate::resolution::resolve;
 
 pub mod backend;
 pub mod cli;
@@ -12,19 +19,16 @@ pub mod parse_input;
 pub mod remote;
 pub mod resolution;
 
-use cli::Cli;
-use error::{WtgError, WtgResult};
-
 /// Run the CLI using the process arguments.
 pub fn run() -> WtgResult<()> {
-    run_with_args(std::env::args())
+    run_with_args(env::args())
 }
 
 /// Run the CLI using a custom iterator of arguments.
 pub fn run_with_args<I, T>(args: I) -> WtgResult<()>
 where
     I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
+    T: Into<OsString> + Clone,
 {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
@@ -59,9 +63,6 @@ fn run_with_cli(cli: Cli) -> WtgResult<()> {
 }
 
 async fn run_async(cli: Cli) -> WtgResult<()> {
-    use backend::resolve_backend;
-    use resolution::resolve;
-
     // Parse the input to determine if it's a remote repo or local
     let parsed_input = cli.parse_input()?;
 

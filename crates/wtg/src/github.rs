@@ -1,3 +1,5 @@
+use std::{env, fs, future::Future, pin::Pin, sync::LazyLock, time::Duration};
+
 use chrono::{DateTime, Utc};
 use octocrab::{
     Octocrab, OctocrabBuilder, Result as OctoResult,
@@ -7,13 +9,10 @@ use octocrab::{
     },
 };
 use serde::Deserialize;
-use std::{future::Future, pin::Pin, sync::LazyLock, time::Duration};
 
-use crate::{
-    error::{WtgError, WtgResult},
-    git::{CommitInfo, TagInfo, parse_semver},
-    parse_input::parse_github_repo_url,
-};
+use crate::error::{WtgError, WtgResult};
+use crate::git::{CommitInfo, TagInfo, parse_semver};
+use crate::parse_input::parse_github_repo_url;
 
 impl From<RepoCommit> for CommitInfo {
     fn from(commit: RepoCommit) -> Self {
@@ -239,7 +238,7 @@ impl GitHubClient {
         let read_timeout = Some(Self::read_timeout());
 
         // Try GITHUB_TOKEN env var first
-        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        if let Ok(token) = env::var("GITHUB_TOKEN") {
             return OctocrabBuilder::new()
                 .personal_token(token)
                 .set_connect_timeout(connect_timeout)
@@ -282,7 +281,7 @@ impl GitHubClient {
         // Try XDG-style path first (~/.config/gh/hosts.yml)
         if let Some(home) = dirs::home_dir() {
             let xdg_path = home.join(".config").join("gh").join("hosts.yml");
-            if let Ok(content) = std::fs::read_to_string(&xdg_path)
+            if let Ok(content) = fs::read_to_string(&xdg_path)
                 && let Ok(config) = serde_yaml::from_str::<GhConfig>(&content)
                 && let Some(token) = config.github_com.oauth_token
             {
@@ -296,7 +295,7 @@ impl GitHubClient {
             config_path.push("gh");
             config_path.push("hosts.yml");
 
-            if let Ok(content) = std::fs::read_to_string(&config_path)
+            if let Ok(content) = fs::read_to_string(&config_path)
                 && let Ok(config) = serde_yaml::from_str::<GhConfig>(&content)
             {
                 return config.github_com.oauth_token;

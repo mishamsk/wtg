@@ -6,16 +6,15 @@
 //! - PRs/Issues: GitHub API only
 //! - Releases: Local tags + GitHub API for metadata
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::Backend;
-use super::git_backend::GitBackend;
-use super::github_backend::GitHubBackend;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+
+use crate::backend::{Backend, git_backend::GitBackend, github_backend::GitHubBackend};
 use crate::error::{WtgError, WtgResult};
-use crate::git::{CommitInfo, FileInfo, TagInfo};
+use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, PullRequestInfo};
 
 /// Combined backend using both local git and GitHub API.
@@ -197,8 +196,6 @@ impl Backend for CombinedBackend {
     }
 
     async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
-        use crate::git::GitRepo;
-
         // Check if same repo (no cross-project needed)
         if self
             .github
