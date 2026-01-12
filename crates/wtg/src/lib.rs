@@ -67,7 +67,7 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
 
     // Use new backend path if -t flag is set
     if cli.use_new_backend {
-        return run_with_new_backend(parsed_input).await;
+        return run_with_new_backend(parsed_input, cli.fetch).await;
     }
 
     // Create the appropriate repo manager
@@ -78,13 +78,13 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     };
 
     // Get the git repo instance
-    let git_repo = repo_manager.git_repo()?;
+    let git_repo = repo_manager.git_repo().clone();
 
-    // Determine the remote info - either from the remote repo manager or from the local repo
+    // Determine the remote info - either from the repo manager or from the local repo's remotes
     let remote_info = repo_manager
-        .remote_info()
+        .repo_info()
         .cloned()
-        .map_or_else(|| git_repo.github_remote(), Some);
+        .or_else(|| git_repo.github_remote());
 
     // Print snarky messages if no GitHub remote (only for local repos)
     if remote_info.is_none() {
@@ -105,12 +105,15 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
 }
 
 /// Run using the new trait-based backend architecture.
-async fn run_with_new_backend(parsed_input: parse_input::ParsedInput) -> WtgResult<()> {
+async fn run_with_new_backend(
+    parsed_input: parse_input::ParsedInput,
+    allow_user_repo_fetch: bool,
+) -> WtgResult<()> {
     use backend::resolve_backend;
     use resolution::resolve;
 
     // Create the backend based on available resources
-    let backend = resolve_backend(&parsed_input)?;
+    let backend = resolve_backend(&parsed_input, allow_user_repo_fetch)?;
 
     // Print snarky messages if no GitHub remote (only for local repos with git-only backend)
     if backend.repo_info().is_none()

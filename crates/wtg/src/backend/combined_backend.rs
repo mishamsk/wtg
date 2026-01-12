@@ -9,13 +9,14 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::Backend;
 use super::git_backend::GitBackend;
 use super::github_backend::GitHubBackend;
 use crate::error::{WtgError, WtgResult};
-use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
+use crate::git::{CommitInfo, FileInfo, TagInfo};
+use crate::github::{ExtendedIssueInfo, GhRepoInfo, PullRequestInfo};
 
 /// Combined backend using both local git and GitHub API.
 ///
@@ -27,7 +28,7 @@ use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo
 /// This backend overrides the individual trait methods with fallback logic,
 /// then uses the default `resolve()` implementation which calls those methods.
 /// This ensures fallback works correctly for all query types.
-pub struct CombinedBackend {
+pub(crate) struct CombinedBackend {
     git: GitBackend,
     github: GitHubBackend,
 }
@@ -35,20 +36,8 @@ pub struct CombinedBackend {
 impl CombinedBackend {
     /// Create a new `CombinedBackend` from git and GitHub backends.
     #[must_use]
-    pub const fn new(git: GitBackend, github: GitHubBackend) -> Self {
+    pub(crate) const fn new(git: GitBackend, github: GitHubBackend) -> Self {
         Self { git, github }
-    }
-
-    /// Get a reference to the underlying `GitRepo`.
-    #[must_use]
-    pub const fn git_repo(&self) -> &GitRepo {
-        self.git.git_repo()
-    }
-
-    /// Get a reference to the `GitHubClient`.
-    #[must_use]
-    pub fn github_client(&self) -> &GitHubClient {
-        self.github.client()
     }
 
     /// Find the best release/tag for a commit using both local and API data.
@@ -63,12 +52,13 @@ impl CombinedBackend {
         commit_hash: &str,
         commit_date: Option<DateTime<Utc>>,
     ) -> Option<TagInfo> {
-        let repo = self.git.git_repo();
+        let manager = self.git.repo_manager();
+        let repo = manager.git_repo();
         let repo_info = self.github.repo_info()?;
         let client = self.github.client();
 
-        // Get local tag candidates
-        let candidates = repo.tags_containing_commit(commit_hash);
+        // Get local tag candidates (ensure_tags is called internally)
+        let candidates = manager.tags_containing_commit(commit_hash);
         let has_semver = candidates.iter().any(TagInfo::is_semver);
 
         // Build timestamp map for sorting
@@ -208,8 +198,36 @@ impl Backend for CombinedBackend {
     }
 
     async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
-        // For cross-project, return GitHub-only backend (no local clone)
-        self.github.for_repo(repo_info).await
+        use crate::repo_manager::RepoManager;
+
+        // Check if same repo (no cross-project needed)
+        if self
+            .github
+            .repo_info()
+            .is_some_and(|ri| ri.owner() == repo_info.owner() && ri.repo() == repo_info.repo())
+        {
+            return None;
+        }
+
+        // Create GitHubBackend with shared client
+        let github =
+            GitHubBackend::with_client(Arc::clone(self.github.client()), repo_info.clone());
+
+        // Try to create RepoManager for cross-project git operations
+        match RepoManager::remote(repo_info.clone()) {
+            Ok(manager) => {
+                let git = GitBackend::new(manager);
+                Some(Box::new(Self::new(git, github)))
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Cannot access git for {}/{}: {e}. Using API only for cross-project refs.",
+                    repo_info.owner(),
+                    repo_info.repo()
+                );
+                Some(Box::new(github))
+            }
+        }
     }
 
     // ============================================

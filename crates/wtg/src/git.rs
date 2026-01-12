@@ -103,6 +103,27 @@ impl GitRepo {
         &self.path
     }
 
+    /// Check if this is a shallow repository
+    #[must_use]
+    pub fn is_shallow(&self) -> bool {
+        self.with_repo(git2::Repository::is_shallow)
+    }
+
+    /// Get the remote URL for origin or upstream (for fetching)
+    #[must_use]
+    pub fn remote_url(&self) -> Option<String> {
+        self.with_repo(|repo| {
+            for remote_name in ["origin", "upstream"] {
+                if let Ok(remote) = repo.find_remote(remote_name)
+                    && let Some(url) = remote.url()
+                {
+                    return Some(url.to_string());
+                }
+            }
+            None
+        })
+    }
+
     fn with_repo<T>(&self, f: impl FnOnce(&Repository) -> T) -> T {
         let repo = self.repo.lock().expect("git repository mutex poisoned");
         f(&repo)

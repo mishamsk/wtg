@@ -1,62 +1,40 @@
 //! Pure local git backend implementation.
 //!
-//! This backend only uses local git operations via `GitRepo`.
-//! It cannot fetch PRs, issues, or release metadata from GitHub.
+//! This backend wraps a `RepoManager` and provides git-only operations.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::path::Path;
 
 use super::Backend;
-use crate::error::WtgResult;
-use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
+use crate::error::{WtgError, WtgResult};
+use crate::git::{CommitInfo, FileInfo, TagInfo};
 use crate::github::{GhRepoInfo, GitHubClient};
+use crate::repo_manager::RepoManager;
 
-/// Pure local git backend.
+/// Pure local git backend wrapping a `RepoManager`.
 ///
-/// Uses `GitRepo` for all operations. Cannot access GitHub API,
-/// so PR/Issue queries will return `Unsupported`.
-pub struct GitBackend {
-    repo: GitRepo,
-    repo_info: Option<GhRepoInfo>,
+/// Uses `RepoManager` for all operations including smart fetching.
+/// Cannot access GitHub API, so PR/Issue queries will return `Unsupported`.
+pub(crate) struct GitBackend {
+    manager: RepoManager,
 }
 
 impl GitBackend {
-    /// Create a new `GitBackend` from a `GitRepo`.
+    /// Create a `GitBackend` from an existing `RepoManager`.
     #[must_use]
-    pub fn new(repo: GitRepo) -> Self {
-        let repo_info = repo.github_remote();
-        Self { repo, repo_info }
+    pub(crate) const fn new(manager: RepoManager) -> Self {
+        Self { manager }
     }
 
-    /// Open a `GitBackend` from the current directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if not in a git repository.
-    pub fn open() -> WtgResult<Self> {
-        Ok(Self::new(GitRepo::open()?))
-    }
-
-    /// Open a `GitBackend` from a specific path.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the path is not a git repository.
-    pub fn from_path(path: &Path) -> WtgResult<Self> {
-        Ok(Self::new(GitRepo::from_path(path)?))
-    }
-
-    /// Get a reference to the underlying `GitRepo`.
-    #[must_use]
-    pub const fn git_repo(&self) -> &GitRepo {
-        &self.repo
+    /// Get a reference to the underlying `RepoManager`.
+    pub(crate) const fn repo_manager(&self) -> &RepoManager {
+        &self.manager
     }
 
     /// Find tags containing a commit and pick the best one.
     fn find_best_tag_for_commit(&self, commit_hash: &str) -> Option<TagInfo> {
-        let candidates = self.repo.tags_containing_commit(commit_hash);
+        let candidates = self.manager.tags_containing_commit(commit_hash);
         if candidates.is_empty() {
             return None;
         }
@@ -67,7 +45,9 @@ impl GitBackend {
             .map(|tag| {
                 (
                     tag.commit_hash.clone(),
-                    self.repo.get_commit_timestamp(&tag.commit_hash),
+                    self.manager
+                        .git_repo()
+                        .get_commit_timestamp(&tag.commit_hash),
                 )
             })
             .collect();
@@ -115,7 +95,7 @@ impl GitBackend {
 #[async_trait]
 impl Backend for GitBackend {
     fn repo_info(&self) -> Option<&GhRepoInfo> {
-        self.repo_info.as_ref()
+        self.manager.repo_info()
     }
 
     // ============================================
@@ -123,15 +103,16 @@ impl Backend for GitBackend {
     // ============================================
 
     async fn find_commit(&self, hash: &str) -> WtgResult<CommitInfo> {
-        self.repo
-            .find_commit(hash)
-            .ok_or_else(|| crate::error::WtgError::NotFound(hash.to_string()))
+        // Use smart find that can fetch on demand
+        self.manager
+            .find_commit_or_fetch(hash)?
+            .ok_or_else(|| WtgError::NotFound(hash.to_string()))
     }
 
     async fn enrich_commit(&self, mut commit: CommitInfo) -> CommitInfo {
         // Add commit URL if we have repo info
         if commit.commit_url.is_none()
-            && let Some(repo_info) = &self.repo_info
+            && let Some(repo_info) = self.manager.repo_info()
         {
             commit.commit_url = Some(GitHubClient::commit_url(repo_info, &commit.hash));
         }
@@ -143,9 +124,10 @@ impl Backend for GitBackend {
     // ============================================
 
     async fn find_file(&self, path: &str) -> WtgResult<FileInfo> {
-        self.repo
+        self.manager
+            .git_repo()
             .find_file(path)
-            .ok_or_else(|| crate::error::WtgError::NotFound(path.to_string()))
+            .ok_or_else(|| WtgError::NotFound(path.to_string()))
     }
 
     // ============================================
@@ -153,11 +135,12 @@ impl Backend for GitBackend {
     // ============================================
 
     async fn find_tag(&self, name: &str) -> WtgResult<TagInfo> {
-        self.repo
+        self.manager
+            .git_repo()
             .get_tags()
             .into_iter()
             .find(|t| t.name == name)
-            .ok_or_else(|| crate::error::WtgError::NotFound(name.to_string()))
+            .ok_or_else(|| WtgError::NotFound(name.to_string()))
     }
 
     async fn find_release_for_commit(
@@ -173,14 +156,14 @@ impl Backend for GitBackend {
     // ============================================
 
     fn commit_url(&self, hash: &str) -> Option<String> {
-        self.repo_info
-            .as_ref()
+        self.manager
+            .repo_info()
             .map(|ri| GitHubClient::commit_url(ri, hash))
     }
 
     fn tag_url(&self, tag: &str) -> Option<String> {
-        self.repo_info
-            .as_ref()
+        self.manager
+            .repo_info()
             .map(|ri| GitHubClient::tag_url(ri, tag))
     }
 

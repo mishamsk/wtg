@@ -26,6 +26,13 @@ pub struct Cli {
     #[arg(short = 't', hide = true)]
     pub use_new_backend: bool,
 
+    /// Allow fetching missing refs from remote into local repository
+    ///
+    /// By default, local repositories don't fetch to avoid unexpected network calls.
+    /// Use this flag to enable fetching when a commit/tag isn't found locally.
+    #[arg(long)]
+    pub fetch: bool,
+
     /// Print help information
     #[arg(short, long, action = clap::ArgAction::Help)]
     help: Option<bool>,

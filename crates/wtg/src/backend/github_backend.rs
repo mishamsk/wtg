@@ -17,7 +17,7 @@ use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo
 ///
 /// Uses `GitHubClient` for all operations. Cannot perform local git operations,
 /// so file queries will return `Unsupported`.
-pub struct GitHubBackend {
+pub(crate) struct GitHubBackend {
     client: Arc<GitHubClient>,
     repo_info: GhRepoInfo,
 }
@@ -27,7 +27,7 @@ impl GitHubBackend {
     ///
     /// Returns `None` if no GitHub client can be created.
     #[must_use]
-    pub fn new(repo_info: GhRepoInfo) -> Option<Self> {
+    pub(crate) fn new(repo_info: GhRepoInfo) -> Option<Self> {
         Some(Self {
             client: Arc::new(GitHubClient::new()?),
             repo_info,
@@ -36,13 +36,13 @@ impl GitHubBackend {
 
     /// Create a `GitHubBackend` with a shared client.
     #[must_use]
-    pub const fn with_client(client: Arc<GitHubClient>, repo_info: GhRepoInfo) -> Self {
+    pub(crate) const fn with_client(client: Arc<GitHubClient>, repo_info: GhRepoInfo) -> Self {
         Self { client, repo_info }
     }
 
-    /// Get a reference to the `GitHubClient`.
+    /// Get a reference to the Arc-wrapped `GitHubClient`.
     #[must_use]
-    pub fn client(&self) -> &GitHubClient {
+    pub(crate) const fn client(&self) -> &Arc<GitHubClient> {
         &self.client
     }
 
