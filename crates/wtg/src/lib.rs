@@ -67,17 +67,15 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     let parsed_input = cli.parse_input()?;
 
     // Create the backend based on available resources
-    let backend = resolve_backend(&parsed_input, cli.fetch)?;
+    let resolved = resolve_backend(&parsed_input, cli.fetch)?;
 
-    // Print snarky messages if no GitHub remote (only for local repos with git-only backend)
-    if backend.repo_info().is_none()
-        && let Ok(git_repo) = git::GitRepo::open()
-    {
-        remote::check_remote_and_snark(git_repo.path());
+    // Display backend notice if operating in reduced-functionality mode
+    if let Some(notice) = &resolved.notice {
+        output::display_backend_notice(notice);
     }
 
     // Resolve the query using the backend
-    let result = resolve(backend.as_ref(), parsed_input.query()).await?;
+    let result = resolve(resolved.backend.as_ref(), parsed_input.query()).await?;
 
     // Display the result
     output::display(result)?;

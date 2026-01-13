@@ -23,6 +23,7 @@ pub enum WtgError {
     NotGitHubUrl(String),
     MalformedGitHubUrl(String),
     SecurityRejection(String),
+    GitHubClientFailed,
 }
 
 impl fmt::Display for WtgError {
@@ -216,6 +217,27 @@ impl fmt::Display for WtgError {
                     f,
                     "   {}",
                     "Try giving me something to work with, please!".yellow()
+                )
+            }
+            Self::GitHubClientFailed => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🔑 Can't connect to GitHub! Something's blocking the path..."
+                        .red()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "You explicitly asked for GitHub data, but I can't reach it. 😞".red()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Check your GITHUB_TOKEN and network connection!".yellow()
                 )
             }
         }

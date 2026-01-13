@@ -14,6 +14,7 @@ use regex::Regex;
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
 use crate::parse_input::parse_github_repo_url;
+use crate::remote::RemoteInfo;
 
 /// Tracks what data has been synchronized from remote.
 ///
@@ -587,6 +588,32 @@ impl GitRepo {
         self.with_repo(|repo| {
             repo.graph_descendant_of(descendant, ancestor)
                 .unwrap_or(false)
+        })
+    }
+
+    /// Iterate over all remotes in the repository.
+    /// Returns an iterator of `RemoteInfo`.
+    pub fn remotes(&self) -> impl Iterator<Item = RemoteInfo> + '_ {
+        use crate::remote::{RemoteHost, RemoteInfo, RemoteKind};
+
+        // Get remote names upfront (git2 requires this due to mutex)
+        let remote_names: Vec<String> = self.with_repo(|repo| {
+            repo.remotes()
+                .map(|names| names.iter().flatten().map(str::to_string).collect())
+                .unwrap_or_default()
+        });
+
+        remote_names.into_iter().filter_map(move |name| {
+            self.with_repo(|repo| {
+                let remote = repo.find_remote(&name).ok()?;
+                let url = remote.url()?.to_string();
+                Some(RemoteInfo {
+                    name: name.clone(),
+                    kind: RemoteKind::from_name(&name),
+                    host: RemoteHost::from_url(&url),
+                    url,
+                })
+            })
         })
     }
 

@@ -14,6 +14,8 @@ pub(crate) use combined_backend::CombinedBackend;
 pub use git_backend::GitBackend;
 pub(crate) use github_backend::GitHubBackend;
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
@@ -21,6 +23,7 @@ use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, PullRequestInfo};
 use crate::parse_input::ParsedInput;
+use crate::remote::{RemoteHost, RemoteInfo};
 
 /// Unified backend trait for all git/GitHub operations.
 ///
@@ -132,6 +135,44 @@ pub trait Backend: Send + Sync {
 // Backend resolution
 // ============================================
 
+/// Notice about backend operating in reduced-functionality mode.
+/// These are soft warnings - we continue with degraded capabilities.
+#[derive(Debug)]
+pub enum BackendNotice {
+    /// No remotes configured at all
+    NoRemotes,
+    /// Single host type detected but it's not GitHub
+    /// (all remotes point to GitLab, Bitbucket, or unknown host)
+    UnsupportedHost {
+        /// The best remote we found (by priority: origin > upstream > other)
+        best_remote: RemoteInfo,
+    },
+    /// Multiple different hosts detected, none of them GitHub
+    /// (e.g., origin=GitLab, upstream=Bitbucket)
+    MixedRemotes {
+        /// All the unique hosts we found
+        hosts: Vec<RemoteHost>,
+        /// Total remote count
+        count: usize,
+    },
+    /// GitHub remote found but API client couldn't be created
+    /// (missing token, network issue, etc.)
+    UnreachableGitHub {
+        /// The GitHub remote we found
+        remote: RemoteInfo,
+    },
+    /// Local git repo couldn't be opened, using pure API
+    /// (only for remote repo queries)
+    ApiOnly,
+}
+
+/// Result of backend resolution.
+pub struct ResolvedBackend {
+    pub backend: Box<dyn Backend>,
+    /// Optional notice about reduced functionality.
+    pub notice: Option<BackendNotice>,
+}
+
 /// Resolve the best backend based on available resources.
 ///
 /// # Arguments
@@ -139,47 +180,112 @@ pub trait Backend: Send + Sync {
 /// * `allow_user_repo_fetch` - If true, allow fetching into user's local repo
 ///
 /// Decision tree:
-/// 1. Explicit repo info provided → Use cached/cloned repo + GitHub API (or git-only if GitHub client fails)
-/// 2. In local repo with GitHub remote → Combined backend (or git-only if GitHub client fails)
-/// 3. In local repo without remote → Git-only backend
+/// 1. Explicit repo info provided → Use cached/cloned repo + GitHub API (hard error if GitHub client fails)
+/// 2. In local repo with GitHub remote → Combined backend (soft notice if GitHub client fails)
+/// 3. In local repo without GitHub remote → Git-only backend with appropriate notice
 /// 4. Not in repo and no info → Error
 pub fn resolve_backend(
     parsed_input: &ParsedInput,
     allow_user_repo_fetch: bool,
-) -> WtgResult<Box<dyn Backend>> {
+) -> WtgResult<ResolvedBackend> {
+    // Case 1: Explicit repo info provided (from URL/flags)
     if let Some(repo_info) = parsed_input.gh_repo_info() {
-        // Explicit repo info - use GitRepo::remote for cache handling
-        // Remote repos always allow fetching to keep cache fresh
-        let git_repo = GitRepo::remote(repo_info.clone())?;
-        let git = GitBackend::new(git_repo);
+        // User explicitly provided GitHub info - GitHub client failure is a hard error
+        let github = GitHubBackend::new(repo_info.clone()).ok_or(WtgError::GitHubClientFailed)?;
 
-        // Try creating GitHub backend, fall back to git-only with warning
-        if let Some(github) = GitHubBackend::new(repo_info.clone()) {
-            return Ok(Box::new(CombinedBackend::new(git, github)));
+        // Try to get local git repo for combined backend
+        match GitRepo::remote(repo_info.clone()) {
+            Ok(git_repo) => {
+                let git = GitBackend::new(git_repo);
+                Ok(ResolvedBackend {
+                    backend: Box::new(CombinedBackend::new(git, github)),
+                    notice: None,
+                })
+            }
+            Err(_) => {
+                // Can't access git locally, use pure API (soft notice)
+                Ok(ResolvedBackend {
+                    backend: Box::new(github),
+                    notice: Some(BackendNotice::ApiOnly),
+                })
+            }
         }
-        eprintln!("Warning: GitHub features unavailable (no client could be created)");
-        return Ok(Box::new(git));
+    } else {
+        // Case 2: Local repo detection
+        resolve_local_backend(allow_user_repo_fetch)
     }
+}
 
-    // No explicit repo info - must be in local repo
+fn resolve_local_backend(allow_user_repo_fetch: bool) -> WtgResult<ResolvedBackend> {
     let mut git_repo = GitRepo::open()?;
-
-    // Only allow fetching into user's repo if explicitly requested via --fetch
     if allow_user_repo_fetch {
         git_repo.set_allow_fetch(true);
     }
 
-    let git = GitBackend::new(git_repo);
+    // Collect and sort remotes by priority (origin > upstream > other, GitHub first)
+    let mut remotes: Vec<RemoteInfo> = git_repo.remotes().collect();
+    remotes.sort_by_key(RemoteInfo::priority);
 
-    // Try to find GitHub remote
-    if let Some(repo_info) = git.repo_info().cloned() {
-        // Try GitHub, fall back to git-only with warning
-        if let Some(github) = GitHubBackend::new(repo_info) {
-            return Ok(Box::new(CombinedBackend::new(git, github)));
-        }
-        eprintln!("Warning: GitHub features unavailable (no client could be created)");
+    // No remotes at all
+    if remotes.is_empty() {
+        let git = GitBackend::new(git_repo);
+        return Ok(ResolvedBackend {
+            backend: Box::new(git),
+            notice: Some(BackendNotice::NoRemotes),
+        });
     }
 
-    // Local git only - no GitHub access
-    Ok(Box::new(git))
+    // Find the best GitHub remote (if any)
+    let github_remote = remotes
+        .iter()
+        .find(|r| r.host == Some(RemoteHost::GitHub))
+        .cloned();
+
+    if let Some(github_remote) = github_remote {
+        // We have a GitHub remote - try to use it
+        if let Some(repo_info) = git_repo.github_remote() {
+            let git = GitBackend::new(git_repo);
+
+            if let Some(github) = GitHubBackend::new(repo_info) {
+                // Full GitHub support!
+                return Ok(ResolvedBackend {
+                    backend: Box::new(CombinedBackend::new(git, github)),
+                    notice: None,
+                });
+            }
+
+            // GitHub remote found but client creation failed
+            return Ok(ResolvedBackend {
+                backend: Box::new(git),
+                notice: Some(BackendNotice::UnreachableGitHub {
+                    remote: github_remote,
+                }),
+            });
+        }
+    }
+
+    // No GitHub remote - analyze what we have
+    let git = GitBackend::new(git_repo);
+    let unique_hosts: HashSet<Option<RemoteHost>> = remotes.iter().map(|r| r.host).collect();
+
+    // Check if we have mixed hosts (excluding None/unknown)
+    let known_hosts: Vec<RemoteHost> = unique_hosts.iter().filter_map(|h| *h).collect();
+
+    if known_hosts.len() > 1 {
+        // Multiple different known hosts - we're lost!
+        return Ok(ResolvedBackend {
+            backend: Box::new(git),
+            notice: Some(BackendNotice::MixedRemotes {
+                hosts: known_hosts,
+                count: remotes.len(),
+            }),
+        });
+    }
+
+    // Single host type (or all unknown) - return the best one
+    let best_remote = remotes.into_iter().next().unwrap();
+    Ok(ResolvedBackend {
+        backend: Box::new(git),
+        notice: Some(BackendNotice::UnsupportedHost { best_remote }),
+    })
 }

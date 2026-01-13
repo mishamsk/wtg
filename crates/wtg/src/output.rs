@@ -3,9 +3,11 @@ use std::collections::HashSet;
 use crossterm::style::Stylize;
 use octocrab::models::IssueState;
 
+use crate::backend::BackendNotice;
 use crate::error::WtgResult;
 use crate::git::{CommitInfo, TagInfo};
 use crate::github::PullRequestInfo;
+use crate::remote::{RemoteHost, RemoteInfo};
 use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing, IssueInfo};
 
 pub fn display(thing: IdentifiedThing) -> WtgResult<()> {
@@ -507,4 +509,148 @@ fn display_release_info(release: Option<TagInfo>, commit_url: Option<&str>) {
             );
         }
     }
+}
+
+// ============================================
+// Backend notice display
+// ============================================
+
+/// Display notice about reduced-functionality backend.
+pub fn display_backend_notice(notice: &BackendNotice) {
+    match notice {
+        BackendNotice::NoRemotes => {
+            println!(
+                "{}",
+                "🤐 No remotes configured - what are you hiding?"
+                    .yellow()
+                    .italic()
+            );
+            println!(
+                "{}",
+                "   (Or maybe... go do some OSS? 👀)".yellow().italic()
+            );
+            println!();
+        }
+        BackendNotice::UnsupportedHost { best_remote } => {
+            display_unsupported_host(best_remote);
+        }
+        BackendNotice::MixedRemotes { hosts, count } => {
+            display_mixed_remotes(hosts, *count);
+        }
+        BackendNotice::UnreachableGitHub { remote } => {
+            println!(
+                "{}",
+                "🔑 Found a GitHub remote, but can't talk to the API..."
+                    .yellow()
+                    .italic()
+            );
+            println!(
+                "{}",
+                format!(
+                    "   Remote '{}' points to GitHub, but no luck connecting.",
+                    remote.name
+                )
+                .yellow()
+                .italic()
+            );
+            println!(
+                "{}",
+                "   (Missing token? Network hiccup? I'll work with what I've got!)"
+                    .yellow()
+                    .italic()
+            );
+            println!();
+        }
+        BackendNotice::ApiOnly => {
+            println!(
+                "{}",
+                "📡 Using GitHub API only (local git unavailable)"
+                    .yellow()
+                    .italic()
+            );
+            println!(
+                "{}",
+                "   (Some operations may be slower or limited)"
+                    .yellow()
+                    .italic()
+            );
+            println!();
+        }
+    }
+}
+
+fn display_unsupported_host(remote: &RemoteInfo) {
+    match remote.host {
+        Some(RemoteHost::GitLab) => {
+            println!(
+                "{}",
+                "🦊 GitLab spotted! Living that self-hosted life, I see..."
+                    .yellow()
+                    .italic()
+            );
+        }
+        Some(RemoteHost::Bitbucket) => {
+            println!(
+                "{}",
+                "🪣 Bitbucket, eh? Taking the scenic route!"
+                    .yellow()
+                    .italic()
+            );
+        }
+        Some(RemoteHost::GitHub) => {
+            // Shouldn't happen, but handle gracefully
+            return;
+        }
+        None => {
+            println!(
+                "{}",
+                "🌐 A custom git remote? Look at you being all independent!"
+                    .yellow()
+                    .italic()
+            );
+        }
+    }
+
+    println!(
+        "{}",
+        "   (I can only do GitHub API stuff, but let me show you local git info...)"
+            .yellow()
+            .italic()
+    );
+    println!();
+}
+
+fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
+    let host_names: Vec<&str> = hosts
+        .iter()
+        .map(|h| match h {
+            RemoteHost::GitHub => "GitHub",
+            RemoteHost::GitLab => "GitLab",
+            RemoteHost::Bitbucket => "Bitbucket",
+        })
+        .collect();
+
+    println!(
+        "{}",
+        format!(
+            "🤯 Whoa, {} remotes pointing to {}? I'm getting dizzy!",
+            count,
+            host_names.join(", ")
+        )
+        .yellow()
+        .italic()
+    );
+    println!(
+        "{}",
+        "   (You've got quite the multi-cloud setup going on here...)"
+            .yellow()
+            .italic()
+    );
+    println!(
+        "{}",
+        "   (I can only do GitHub API stuff, but let me show you local git info...)"
+            .yellow()
+            .italic()
+    );
+    println!();
 }
