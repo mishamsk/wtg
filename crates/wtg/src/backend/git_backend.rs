@@ -91,8 +91,8 @@ impl GitBackend {
 
 #[async_trait]
 impl Backend for GitBackend {
-    fn repo_info(&self) -> Option<&GhRepoInfo> {
-        self.repo.repo_info()
+    fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
+        self.repo.gh_repo_info()
     }
 
     // ============================================

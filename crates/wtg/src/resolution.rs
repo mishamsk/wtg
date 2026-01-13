@@ -166,7 +166,7 @@ async fn resolve_issue(backend: &dyn Backend, number: u64) -> WtgResult<Identifi
             // Check if PR is from a different repo (cross-project)
             let is_cross_repo = pr.repo_info.as_ref().is_some_and(|pr_repo| {
                 backend
-                    .repo_info()
+                    .gh_repo_info()
                     .is_some_and(|ri| pr_repo.owner() != ri.owner() || pr_repo.repo() != ri.repo())
             });
 

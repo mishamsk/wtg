@@ -31,8 +31,8 @@ use crate::remote::{RemoteHost, RemoteInfo};
 /// return `WtgError::Unsupported` for operations not available.
 #[async_trait]
 pub trait Backend: Send + Sync {
-    /// Get repository info if known (for URL building, cross-project refs).
-    fn repo_info(&self) -> Option<&GhRepoInfo>;
+    /// Get GitHub repository info if known (for URL building, cross-project refs).
+    fn gh_repo_info(&self) -> Option<&GhRepoInfo>;
 
     // ============================================
     // Cross-project support (default: not supported)

@@ -52,7 +52,7 @@ impl CombinedBackend {
         commit_date: Option<DateTime<Utc>>,
     ) -> Option<TagInfo> {
         let repo = self.git.git_repo();
-        let repo_info = self.github.repo_info()?;
+        let gh_repo_info = self.github.gh_repo_info()?;
         let client = self.github.client();
 
         // Get local tag candidates (ensure_tags is called internally)
@@ -84,7 +84,7 @@ impl CombinedBackend {
             };
 
             for tag_name in &target_names {
-                if let Some(release) = client.fetch_release_by_tag(repo_info, tag_name).await {
+                if let Some(release) = client.fetch_release_by_tag(gh_repo_info, tag_name).await {
                     // Find the candidate with matching name and enrich it
                     if let Some(candidate) =
                         enriched_candidates.iter_mut().find(|c| &c.name == tag_name)
@@ -110,7 +110,7 @@ impl CombinedBackend {
         if candidates.is_empty()
             && let Some(since) = commit_date
         {
-            let releases = client.fetch_releases_since(repo_info, since).await;
+            let releases = client.fetch_releases_since(gh_repo_info, since).await;
             let mut api_candidates: Vec<TagInfo> = Vec::new();
 
             for release in releases {
@@ -128,7 +128,7 @@ impl CombinedBackend {
 
                 // Fallback to API check
                 if let Some(tag) = client
-                    .fetch_tag_info_for_release(&release, repo_info, commit_hash)
+                    .fetch_tag_info_for_release(&release, gh_repo_info, commit_hash)
                     .await
                 {
                     api_candidates.push(tag);
@@ -191,15 +191,15 @@ impl CombinedBackend {
 
 #[async_trait]
 impl Backend for CombinedBackend {
-    fn repo_info(&self) -> Option<&GhRepoInfo> {
-        self.github.repo_info()
+    fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
+        self.github.gh_repo_info()
     }
 
     async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
         // Check if same repo (no cross-project needed)
         if self
             .github
-            .repo_info()
+            .gh_repo_info()
             .is_some_and(|ri| ri.owner() == repo_info.owner() && ri.repo() == repo_info.repo())
         {
             return None;
@@ -248,7 +248,7 @@ impl Backend for CombinedBackend {
             return commit;
         }
 
-        let Some(repo_info) = self.github.repo_info() else {
+        let Some(gh_repo_info) = self.github.gh_repo_info() else {
             return commit;
         };
 
@@ -269,7 +269,7 @@ impl Backend for CombinedBackend {
             && let Some(enriched) = self
                 .github
                 .client()
-                .fetch_commit_full_info(repo_info, &commit.hash)
+                .fetch_commit_full_info(gh_repo_info, &commit.hash)
                 .await
         {
             commit.author_login = enriched.author_login;

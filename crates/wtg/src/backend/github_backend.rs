@@ -19,7 +19,7 @@ use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo
 /// so file queries will return `Unsupported`.
 pub(crate) struct GitHubBackend {
     client: Arc<GitHubClient>,
-    repo_info: GhRepoInfo,
+    gh_repo_info: GhRepoInfo,
 }
 
 impl GitHubBackend {
@@ -27,17 +27,20 @@ impl GitHubBackend {
     ///
     /// Returns `None` if no GitHub client can be created.
     #[must_use]
-    pub(crate) fn new(repo_info: GhRepoInfo) -> Option<Self> {
+    pub(crate) fn new(gh_repo_info: GhRepoInfo) -> Option<Self> {
         Some(Self {
             client: Arc::new(GitHubClient::new()?),
-            repo_info,
+            gh_repo_info,
         })
     }
 
     /// Create a `GitHubBackend` with a shared client.
     #[must_use]
-    pub(crate) const fn with_client(client: Arc<GitHubClient>, repo_info: GhRepoInfo) -> Self {
-        Self { client, repo_info }
+    pub(crate) const fn with_client(client: Arc<GitHubClient>, gh_repo_info: GhRepoInfo) -> Self {
+        Self {
+            client,
+            gh_repo_info,
+        }
     }
 
     /// Get a reference to the Arc-wrapped `GitHubClient`.
@@ -54,13 +57,13 @@ impl GitHubBackend {
     ) -> Option<TagInfo> {
         let releases = self
             .client
-            .fetch_releases_since(&self.repo_info, since)
+            .fetch_releases_since(&self.gh_repo_info, since)
             .await;
 
         for release in releases {
             if let Some(tag_info) = self
                 .client
-                .fetch_tag_info_for_release(&release, &self.repo_info, commit_hash)
+                .fetch_tag_info_for_release(&release, &self.gh_repo_info, commit_hash)
                 .await
             {
                 // Found a release containing the commit
@@ -79,8 +82,8 @@ impl GitHubBackend {
 
 #[async_trait]
 impl Backend for GitHubBackend {
-    fn repo_info(&self) -> Option<&GhRepoInfo> {
-        Some(&self.repo_info)
+    fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
+        Some(&self.gh_repo_info)
     }
 
     async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
@@ -97,7 +100,7 @@ impl Backend for GitHubBackend {
 
     async fn find_commit(&self, hash: &str) -> WtgResult<CommitInfo> {
         self.client
-            .fetch_commit_full_info(&self.repo_info, hash)
+            .fetch_commit_full_info(&self.gh_repo_info, hash)
             .await
             .ok_or_else(|| WtgError::NotFound(hash.to_string()))
     }
@@ -108,14 +111,14 @@ impl Backend for GitHubBackend {
 
     async fn fetch_issue(&self, number: u64) -> WtgResult<ExtendedIssueInfo> {
         self.client
-            .fetch_issue(&self.repo_info, number)
+            .fetch_issue(&self.gh_repo_info, number)
             .await
             .ok_or_else(|| WtgError::NotFound(format!("Issue #{number}")))
     }
 
     async fn fetch_pr(&self, number: u64) -> WtgResult<PullRequestInfo> {
         self.client
-            .fetch_pr(&self.repo_info, number)
+            .fetch_pr(&self.gh_repo_info, number)
             .await
             .ok_or_else(|| WtgError::NotFound(format!("PR #{number}")))
     }
@@ -138,11 +141,11 @@ impl Backend for GitHubBackend {
     // ============================================
 
     fn commit_url(&self, hash: &str) -> Option<String> {
-        Some(GitHubClient::commit_url(&self.repo_info, hash))
+        Some(GitHubClient::commit_url(&self.gh_repo_info, hash))
     }
 
     fn tag_url(&self, tag: &str) -> Option<String> {
-        Some(GitHubClient::tag_url(&self.repo_info, tag))
+        Some(GitHubClient::tag_url(&self.gh_repo_info, tag))
     }
 
     fn author_url_from_email(&self, email: &str) -> Option<String> {

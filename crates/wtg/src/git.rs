@@ -14,7 +14,7 @@ use regex::Regex;
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
 use crate::parse_input::parse_github_repo_url;
-use crate::remote::RemoteInfo;
+use crate::remote::{RemoteHost, RemoteInfo};
 
 /// Tracks what data has been synchronized from remote.
 ///
@@ -37,8 +37,8 @@ pub struct GitRepo {
     path: PathBuf,
     /// Remote URL for fetching
     remote_url: Option<String>,
-    /// Repository info (owner/repo) if explicitly set
-    repo_info: Option<GhRepoInfo>,
+    /// GitHub repository info (owner/repo) if explicitly set
+    gh_repo_info: Option<GhRepoInfo>,
     /// Whether fetching is allowed
     allow_fetch: bool,
     /// Tracks what's been synced from remote
@@ -119,7 +119,7 @@ impl GitRepo {
             repo: Arc::new(Mutex::new(repo)),
             path,
             remote_url,
-            repo_info: None,
+            gh_repo_info: None,
             allow_fetch: false,
             fetch_state: Mutex::new(FetchState::default()),
         })
@@ -135,7 +135,7 @@ impl GitRepo {
             repo: Arc::new(Mutex::new(repo)),
             path: repo_path,
             remote_url,
-            repo_info: None,
+            gh_repo_info: None,
             allow_fetch: false,
             fetch_state: Mutex::new(FetchState::default()),
         })
@@ -143,9 +143,10 @@ impl GitRepo {
 
     /// Open or clone a remote GitHub repository.
     /// Uses a cache directory (~/.cache/wtg/repos). Fetch is enabled by default.
-    pub fn remote(repo_info: GhRepoInfo) -> WtgResult<Self> {
+    pub fn remote(gh_repo_info: GhRepoInfo) -> WtgResult<Self> {
         let cache_dir = get_cache_dir()?;
-        let repo_cache_path = cache_dir.join(format!("{}/{}", repo_info.owner(), repo_info.repo()));
+        let repo_cache_path =
+            cache_dir.join(format!("{}/{}", gh_repo_info.owner(), gh_repo_info.repo()));
 
         // Check if already cloned
         let full_metadata_synced =
@@ -160,7 +161,7 @@ impl GitRepo {
                 }
             } else {
                 // Clone it (with filter=blob:none for efficiency)
-                clone_remote_repo(repo_info.owner(), repo_info.repo(), &repo_cache_path)?;
+                clone_remote_repo(gh_repo_info.owner(), gh_repo_info.repo(), &repo_cache_path)?;
                 true // Fresh clone has all metadata
             };
 
@@ -168,15 +169,15 @@ impl GitRepo {
         let path = repo.path().to_path_buf();
         let remote_url = Some(format!(
             "https://github.com/{}/{}.git",
-            repo_info.owner(),
-            repo_info.repo()
+            gh_repo_info.owner(),
+            gh_repo_info.repo()
         ));
 
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
             path,
             remote_url,
-            repo_info: Some(repo_info),
+            gh_repo_info: Some(gh_repo_info),
             allow_fetch: true,
             fetch_state: Mutex::new(FetchState {
                 full_metadata_synced,
@@ -220,10 +221,10 @@ impl GitRepo {
         self.allow_fetch = allow;
     }
 
-    /// Get a reference to the stored repo info (owner/repo) if explicitly set.
+    /// Get a reference to the stored GitHub repo info (owner/repo) if explicitly set.
     #[must_use]
-    pub const fn repo_info(&self) -> Option<&GhRepoInfo> {
-        self.repo_info.as_ref()
+    pub const fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
+        self.gh_repo_info.as_ref()
     }
 
     fn with_repo<T>(&self, f: impl FnOnce(&Repository) -> T) -> T {
@@ -618,38 +619,25 @@ impl GitRepo {
     }
 
     /// Get the GitHub remote info.
-    /// Returns stored `repo_info` if set, otherwise extracts from git remotes.
+    /// Returns stored `gh_repo_info` if set, otherwise extracts from git remotes
+    /// using the `remotes()` API with priority ordering (origin > upstream > other,
+    /// GitHub remotes first within each kind).
     #[must_use]
     pub fn github_remote(&self) -> Option<GhRepoInfo> {
-        // Return stored repo_info if explicitly set (e.g., from remote() constructor)
-        if let Some(info) = &self.repo_info {
+        // Return stored gh_repo_info if explicitly set (e.g., from remote() constructor)
+        if let Some(info) = &self.gh_repo_info {
             return Some(info.clone());
         }
 
-        // Otherwise, extract from git remotes
-        self.with_repo(|repo| {
-            for remote_name in ["upstream", "origin"] {
-                if let Ok(remote) = repo.find_remote(remote_name)
-                    && let Some(url) = remote.url()
-                    && let Some(repo_info) = parse_github_repo_url(url)
-                {
-                    return Some(repo_info);
-                }
-            }
+        // Use remotes() API to find the best GitHub remote
+        let mut remotes: Vec<_> = self.remotes().collect();
+        remotes.sort_by_key(RemoteInfo::priority);
 
-            if let Ok(remotes) = repo.remotes() {
-                for remote_name in remotes.iter().flatten() {
-                    if let Ok(remote) = repo.find_remote(remote_name)
-                        && let Some(url) = remote.url()
-                        && let Some(repo_info) = parse_github_repo_url(url)
-                    {
-                        return Some(repo_info);
-                    }
-                }
-            }
-
-            None
-        })
+        // Find the first GitHub remote and parse its URL
+        remotes
+            .into_iter()
+            .find(|r| r.host == Some(RemoteHost::GitHub))
+            .and_then(|r| parse_github_repo_url(&r.url))
     }
 
     /// Convert a `git2::Commit` to `CommitInfo`
