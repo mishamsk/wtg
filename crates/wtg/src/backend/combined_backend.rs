@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use crate::backend::{Backend, git_backend::GitBackend, github_backend::GitHubBackend};
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{ExtendedIssueInfo, GhRepoInfo, PullRequestInfo};
+use crate::github::{ExtendedIssueInfo, PullRequestInfo};
 
 /// Combined backend using both local git and GitHub API.
 ///
@@ -52,7 +52,7 @@ impl CombinedBackend {
         commit_date: Option<DateTime<Utc>>,
     ) -> Option<TagInfo> {
         let repo = self.git.git_repo();
-        let gh_repo_info = self.github.gh_repo_info()?;
+        let gh_repo_info = self.github.repo_info();
         let client = self.github.client();
 
         // Get local tag candidates (ensure_tags is called internally)
@@ -191,26 +191,20 @@ impl CombinedBackend {
 
 #[async_trait]
 impl Backend for CombinedBackend {
-    fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
-        self.github.gh_repo_info()
-    }
+    async fn backend_for_pr(&self, pr: &PullRequestInfo) -> Option<Box<dyn Backend>> {
+        let pr_repo = pr.repo_info.as_ref()?;
+        let our_repo = self.github.repo_info();
 
-    async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
-        // Check if same repo (no cross-project needed)
-        if self
-            .github
-            .gh_repo_info()
-            .is_some_and(|ri| ri.owner() == repo_info.owner() && ri.repo() == repo_info.repo())
-        {
+        // Same repo? No need for cross-project backend
+        if pr_repo.owner() == our_repo.owner() && pr_repo.repo() == our_repo.repo() {
             return None;
         }
 
         // Create GitHubBackend with shared client
-        let github =
-            GitHubBackend::with_client(Arc::clone(self.github.client()), repo_info.clone());
+        let github = GitHubBackend::with_client(Arc::clone(self.github.client()), pr_repo.clone());
 
         // Try to create GitRepo for cross-project git operations
-        match GitRepo::remote(repo_info.clone()) {
+        match GitRepo::remote(pr_repo.clone()) {
             Ok(git_repo) => {
                 let git = GitBackend::new(git_repo);
                 Some(Box::new(Self::new(git, github)))
@@ -218,8 +212,8 @@ impl Backend for CombinedBackend {
             Err(e) => {
                 eprintln!(
                     "⚠️  Cannot access git for {}/{}: {e}. Using API only for cross-project refs.",
-                    repo_info.owner(),
-                    repo_info.repo()
+                    pr_repo.owner(),
+                    pr_repo.repo()
                 );
                 Some(Box::new(github))
             }
@@ -248,9 +242,7 @@ impl Backend for CombinedBackend {
             return commit;
         }
 
-        let Some(gh_repo_info) = self.github.gh_repo_info() else {
-            return commit;
-        };
+        let gh_repo_info = self.github.repo_info();
 
         // Try to extract username from email first (cheap, no API call)
         if commit.author_url.is_none()

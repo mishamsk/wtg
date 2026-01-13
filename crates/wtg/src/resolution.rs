@@ -163,54 +163,34 @@ async fn resolve_issue(backend: &dyn Backend, number: u64) -> WtgResult<Identifi
 
     let (commit, release) = if let Some(ref pr) = closing_pr {
         if let Some(merge_sha) = &pr.merge_commit_sha {
-            // Check if PR is from a different repo (cross-project)
-            let is_cross_repo = pr.repo_info.as_ref().is_some_and(|pr_repo| {
-                backend
-                    .gh_repo_info()
-                    .is_some_and(|ri| pr_repo.owner() != ri.owner() || pr_repo.repo() != ri.repo())
-            });
+            // Get backend for PR (returns cross-project backend if needed, None if same repo)
+            let cross_backend = backend.backend_for_pr(pr).await;
+            let effective_backend: &dyn Backend =
+                cross_backend.as_ref().map_or(backend, |b| b.as_ref());
 
-            if is_cross_repo {
-                // Fetch from PR's repo using cross-project backend
-                if let Some(pr_repo) = &pr.repo_info
-                    && let Some(cross_backend) = backend.for_repo(pr_repo).await
-                {
-                    let commit = cross_backend.find_commit(merge_sha).await.ok();
-                    let commit = match commit {
-                        Some(c) => Some(cross_backend.enrich_commit(c).await),
-                        None => None,
-                    };
+            let commit = effective_backend.find_commit(merge_sha).await.ok();
+            let commit = match commit {
+                Some(c) => Some(effective_backend.enrich_commit(c).await),
+                None => None,
+            };
 
-                    // Try issue's repo first, fall back to PR's repo
-                    let release = if let Some(ref c) = commit {
-                        let hash = &c.hash;
-                        let date = Some(c.date);
-                        match backend.find_release_for_commit(hash, date).await {
-                            Some(r) => Some(r),
-                            None => cross_backend.find_release_for_commit(hash, date).await,
-                        }
-                    } else {
-                        None
-                    };
-
-                    (commit, release)
+            let release = if let Some(ref c) = commit {
+                let hash = &c.hash;
+                let date = Some(c.date);
+                // Try issue's repo first, fall back to PR's repo for releases
+                if cross_backend.is_some() {
+                    match backend.find_release_for_commit(hash, date).await {
+                        Some(r) => Some(r),
+                        None => effective_backend.find_release_for_commit(hash, date).await,
+                    }
                 } else {
-                    (None, None)
+                    backend.find_release_for_commit(hash, date).await
                 }
             } else {
-                // Same repo - use provided backend
-                let commit = backend.find_commit(merge_sha).await.ok();
-                let commit = match commit {
-                    Some(c) => Some(backend.enrich_commit(c).await),
-                    None => None,
-                };
-                let release = if let Some(ref c) = commit {
-                    backend.find_release_for_commit(&c.hash, Some(c.date)).await
-                } else {
-                    None
-                };
-                (commit, release)
-            }
+                None
+            };
+
+            (commit, release)
         } else {
             (None, None)
         }

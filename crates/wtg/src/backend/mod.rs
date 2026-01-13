@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{ExtendedIssueInfo, GhRepoInfo, PullRequestInfo};
+use crate::github::{ExtendedIssueInfo, PullRequestInfo};
 use crate::parse_input::ParsedInput;
 use crate::remote::{RemoteHost, RemoteInfo};
 
@@ -31,15 +31,13 @@ use crate::remote::{RemoteHost, RemoteInfo};
 /// return `WtgError::Unsupported` for operations not available.
 #[async_trait]
 pub trait Backend: Send + Sync {
-    /// Get GitHub repository info if known (for URL building, cross-project refs).
-    fn gh_repo_info(&self) -> Option<&GhRepoInfo>;
-
     // ============================================
     // Cross-project support (default: not supported)
     // ============================================
 
-    /// Spawn a backend for a different repository (for cross-project references).
-    async fn for_repo(&self, _repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
+    /// Get a backend for fetching PR data if the PR is from a different repository.
+    /// Returns None if same repo or cross-project not supported.
+    async fn backend_for_pr(&self, _pr: &PullRequestInfo) -> Option<Box<dyn Backend>> {
         None
     }
 

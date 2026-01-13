@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use super::Backend;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
-use crate::github::{GhRepoInfo, GitHubClient};
+use crate::github::GitHubClient;
 
 /// Pure local git backend wrapping a `GitRepo`.
 ///
@@ -91,9 +91,8 @@ impl GitBackend {
 
 #[async_trait]
 impl Backend for GitBackend {
-    fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
-        self.repo.gh_repo_info()
-    }
+    // Note: backend_for_pr() uses default (returns None) since GitBackend
+    // doesn't have API access for cross-project resolution.
 
     // ============================================
     // Commit operations

@@ -49,6 +49,12 @@ impl GitHubBackend {
         &self.client
     }
 
+    /// Get a reference to the repository info (internal use only).
+    #[must_use]
+    pub(crate) const fn repo_info(&self) -> &GhRepoInfo {
+        &self.gh_repo_info
+    }
+
     /// Find release for a commit by iterating through releases.
     async fn find_release_for_commit_impl(
         &self,
@@ -82,15 +88,20 @@ impl GitHubBackend {
 
 #[async_trait]
 impl Backend for GitHubBackend {
-    fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
-        Some(&self.gh_repo_info)
-    }
+    async fn backend_for_pr(&self, pr: &PullRequestInfo) -> Option<Box<dyn Backend>> {
+        let pr_repo = pr.repo_info.as_ref()?;
 
-    async fn for_repo(&self, repo_info: &GhRepoInfo) -> Option<Box<dyn Backend>> {
+        // Same repo? No need for cross-project backend
+        if pr_repo.owner() == self.gh_repo_info.owner()
+            && pr_repo.repo() == self.gh_repo_info.repo()
+        {
+            return None;
+        }
+
         // Spawn a new backend with shared client for cross-project refs
         Some(Box::new(Self::with_client(
             Arc::clone(&self.client),
-            repo_info.clone(),
+            pr_repo.clone(),
         )))
     }
 
