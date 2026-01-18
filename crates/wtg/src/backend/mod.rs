@@ -22,6 +22,7 @@ use chrono::{DateTime, Utc};
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
+use crate::notice::{Notice, NoticeCallback, no_notices};
 use crate::parse_input::{ParsedInput, ParsedQuery, Query};
 use crate::remote::{RemoteHost, RemoteInfo};
 
@@ -142,83 +143,6 @@ pub trait Backend: Send + Sync {
 // Backend resolution
 // ============================================
 
-/// Notice about backend operating in reduced-functionality mode.
-/// These are soft warnings - we continue with degraded capabilities.
-#[derive(Debug)]
-pub enum BackendNotice {
-    /// No remotes configured at all
-    NoRemotes,
-    /// Single host type detected but it's not GitHub
-    /// (all remotes point to GitLab, Bitbucket, or unknown host)
-    UnsupportedHost {
-        /// The best remote we found (by priority: upstream > origin > other)
-        best_remote: RemoteInfo,
-    },
-    /// Multiple different hosts detected, none of them GitHub
-    /// (e.g., origin=GitLab, upstream=Bitbucket)
-    MixedRemotes {
-        /// All the unique hosts we found
-        hosts: Vec<RemoteHost>,
-        /// Total remote count
-        count: usize,
-    },
-    /// GitHub remote found but API client couldn't be created
-    /// (missing token, network issue, etc.)
-    UnreachableGitHub {
-        /// The GitHub remote we found
-        remote: RemoteInfo,
-    },
-    /// Local git repo couldn't be opened, using pure API
-    /// (only for remote repo queries)
-    ApiOnly,
-}
-
-/// Result of backend resolution.
-pub struct ResolvedBackend {
-    pub backend: Box<dyn Backend>,
-    /// Optional notice about reduced functionality.
-    pub notice: Option<BackendNotice>,
-}
-
-// ============================================
-// Operational notices (emitted during execution)
-// ============================================
-
-/// Notices emitted during git/backend operations.
-/// These are informational messages about what's happening.
-#[derive(Debug, Clone)]
-pub enum Notice {
-    /// Failed to update a cached repository
-    CacheUpdateFailed { error: String },
-    /// Repository is shallow, falling back to API
-    ShallowRepoDetected,
-    /// Starting to clone a remote repository
-    CloningRepo { url: String },
-    /// Clone succeeded
-    CloneSucceeded { used_filter: bool },
-    /// Filter clone failed, falling back to bare clone
-    CloneFallbackToBare { error: String },
-    /// Starting to update a cached repository
-    UpdatingCache,
-    /// Cache update completed
-    CacheUpdated,
-    /// Cross-project reference falling back to API-only
-    CrossProjectFallbackToApi {
-        owner: String,
-        repo: String,
-        error: String,
-    },
-}
-
-/// Callback for emitting notices during operations.
-pub type NoticeCallback = std::sync::Arc<dyn Fn(Notice) + Send + Sync>;
-
-/// Create a no-op callback for when notices should be ignored.
-#[must_use]
-pub fn no_notices() -> NoticeCallback {
-    std::sync::Arc::new(|_| {})
-}
-
 /// Resolve the best backend based on available resources.
 ///
 /// # Arguments
@@ -233,7 +157,7 @@ pub fn no_notices() -> NoticeCallback {
 pub fn resolve_backend(
     parsed_input: &ParsedInput,
     allow_user_repo_fetch: bool,
-) -> WtgResult<ResolvedBackend> {
+) -> WtgResult<Box<dyn Backend>> {
     resolve_backend_with_notices(parsed_input, allow_user_repo_fetch, no_notices())
 }
 
@@ -242,30 +166,22 @@ pub fn resolve_backend_with_notices(
     parsed_input: &ParsedInput,
     allow_user_repo_fetch: bool,
     notice_cb: NoticeCallback,
-) -> WtgResult<ResolvedBackend> {
+) -> WtgResult<Box<dyn Backend>> {
     // Case 1: Explicit repo info provided (from URL/flags)
     if let Some(repo_info) = parsed_input.gh_repo_info() {
         // User explicitly provided GitHub info - GitHub client failure is a hard error
         let github = GitHubBackend::new(repo_info.clone()).ok_or(WtgError::GitHubClientFailed)?;
 
         // Try to get local git repo for combined backend
-        match GitRepo::remote_with_notices(repo_info.clone(), notice_cb.clone()) {
-            Ok(git_repo) => {
-                let git = GitBackend::new(git_repo);
-                let mut combined = CombinedBackend::new(git, github);
-                combined.set_notice_callback(notice_cb);
-                Ok(ResolvedBackend {
-                    backend: Box::new(combined),
-                    notice: None,
-                })
-            }
-            Err(_) => {
-                // Can't access git locally, use pure API (soft notice)
-                Ok(ResolvedBackend {
-                    backend: Box::new(github),
-                    notice: Some(BackendNotice::ApiOnly),
-                })
-            }
+        if let Ok(git_repo) = GitRepo::remote_with_notices(repo_info.clone(), notice_cb.clone()) {
+            let git = GitBackend::new(git_repo);
+            let mut combined = CombinedBackend::new(git, github);
+            combined.set_notice_callback(notice_cb);
+            Ok(Box::new(combined))
+        } else {
+            // Can't access git locally, use pure API (soft notice)
+            notice_cb(Notice::ApiOnly);
+            Ok(Box::new(github))
         }
     } else {
         // Case 2: Local repo detection
@@ -276,7 +192,7 @@ pub fn resolve_backend_with_notices(
 fn resolve_local_backend_with_notices(
     allow_user_repo_fetch: bool,
     notice_cb: NoticeCallback,
-) -> WtgResult<ResolvedBackend> {
+) -> WtgResult<Box<dyn Backend>> {
     let mut git_repo = GitRepo::open()?;
     if allow_user_repo_fetch {
         git_repo.set_allow_fetch(true);
@@ -289,11 +205,9 @@ fn resolve_local_backend_with_notices(
 
     // No remotes at all
     if remotes.is_empty() {
+        notice_cb(Notice::NoRemotes);
         let git = GitBackend::new(git_repo);
-        return Ok(ResolvedBackend {
-            backend: Box::new(git),
-            notice: Some(BackendNotice::NoRemotes),
-        });
+        return Ok(Box::new(git));
     }
 
     // Find the best GitHub remote (if any)
@@ -311,19 +225,14 @@ fn resolve_local_backend_with_notices(
                 // Full GitHub support!
                 let mut combined = CombinedBackend::new(git, github);
                 combined.set_notice_callback(notice_cb);
-                return Ok(ResolvedBackend {
-                    backend: Box::new(combined),
-                    notice: None,
-                });
+                return Ok(Box::new(combined));
             }
 
             // GitHub remote found but client creation failed
-            return Ok(ResolvedBackend {
-                backend: Box::new(git),
-                notice: Some(BackendNotice::UnreachableGitHub {
-                    remote: github_remote,
-                }),
+            notice_cb(Notice::UnreachableGitHub {
+                remote: github_remote,
             });
+            return Ok(Box::new(git));
         }
     }
 
@@ -336,19 +245,15 @@ fn resolve_local_backend_with_notices(
 
     if known_hosts.len() > 1 {
         // Multiple different known hosts - we're lost!
-        return Ok(ResolvedBackend {
-            backend: Box::new(git),
-            notice: Some(BackendNotice::MixedRemotes {
-                hosts: known_hosts,
-                count: remotes.len(),
-            }),
+        notice_cb(Notice::MixedRemotes {
+            hosts: known_hosts,
+            count: remotes.len(),
         });
+        return Ok(Box::new(git));
     }
 
     // Single host type (or all unknown) - return the best one
     let best_remote = remotes.into_iter().next().unwrap();
-    Ok(ResolvedBackend {
-        backend: Box::new(git),
-        notice: Some(BackendNotice::UnsupportedHost { best_remote }),
-    })
+    notice_cb(Notice::UnsupportedHost { best_remote });
+    Ok(Box::new(git))
 }

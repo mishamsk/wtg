@@ -16,6 +16,7 @@ pub mod error;
 pub mod git;
 pub mod github;
 pub mod help;
+pub mod notice;
 pub mod output;
 pub mod parse_input;
 pub mod remote;
@@ -68,23 +69,16 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
     let parsed_input = cli.parse_input()?;
 
-    // Create notice callback for operational messages
+    // Create notice callback - all notices (capability warnings and operational info)
+    // are delivered via callback and printed by output::print_notice
     let notice_cb = Arc::new(output::print_notice);
 
     // Create the backend based on available resources
-    let resolved = resolve_backend_with_notices(&parsed_input, cli.fetch, notice_cb)?;
-
-    // Display backend notice if operating in reduced-functionality mode
-    if let Some(notice) = &resolved.notice {
-        output::display_backend_notice(notice);
-    }
+    let backend = resolve_backend_with_notices(&parsed_input, cli.fetch, notice_cb)?;
 
     // Resolve the query using the backend
-    let query = resolved
-        .backend
-        .disambiguate_query(parsed_input.query())
-        .await?;
-    let result = resolve(resolved.backend.as_ref(), &query).await?;
+    let query = backend.disambiguate_query(parsed_input.query()).await?;
+    let result = resolve(backend.as_ref(), &query).await?;
 
     // Display the result
     output::display(result)?;

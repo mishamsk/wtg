@@ -12,13 +12,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::backend::{
-    Backend, Notice, NoticeCallback, git_backend::GitBackend, github_backend::GitHubBackend,
-    no_notices,
-};
+use crate::backend::{Backend, git_backend::GitBackend, github_backend::GitHubBackend};
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
+use crate::notice::{Notice, NoticeCallback, no_notices};
 use crate::parse_input::{ParsedQuery, Query};
 
 /// Combined backend using both local git and GitHub API.

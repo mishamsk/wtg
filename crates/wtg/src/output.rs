@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use crossterm::style::Stylize;
 use octocrab::models::IssueState;
 
-use crate::backend::{BackendNotice, Notice};
 use crate::error::WtgResult;
 use crate::git::{CommitInfo, TagInfo};
 use crate::github::PullRequestInfo;
+use crate::notice::Notice;
 use crate::remote::{RemoteHost, RemoteInfo};
 use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing, IssueInfo};
 
@@ -513,72 +513,8 @@ fn display_release_info(release: Option<TagInfo>, commit_url: Option<&str>) {
 }
 
 // ============================================
-// Backend notice display
+// Notice display
 // ============================================
-
-/// Display notice about reduced-functionality backend.
-pub fn display_backend_notice(notice: &BackendNotice) {
-    match notice {
-        BackendNotice::NoRemotes => {
-            println!(
-                "{}",
-                "🤐 No remotes configured - what are you hiding?"
-                    .yellow()
-                    .italic()
-            );
-            println!(
-                "{}",
-                "   (Or maybe... go do some OSS? 👀)".yellow().italic()
-            );
-            println!();
-        }
-        BackendNotice::UnsupportedHost { best_remote } => {
-            display_unsupported_host(best_remote);
-        }
-        BackendNotice::MixedRemotes { hosts, count } => {
-            display_mixed_remotes(hosts, *count);
-        }
-        BackendNotice::UnreachableGitHub { remote } => {
-            println!(
-                "{}",
-                "🔑 Found a GitHub remote, but can't talk to the API..."
-                    .yellow()
-                    .italic()
-            );
-            println!(
-                "{}",
-                format!(
-                    "   Remote '{}' points to GitHub, but no luck connecting.",
-                    remote.name
-                )
-                .yellow()
-                .italic()
-            );
-            println!(
-                "{}",
-                "   (Missing token? Network hiccup? I'll work with what I've got!)"
-                    .yellow()
-                    .italic()
-            );
-            println!();
-        }
-        BackendNotice::ApiOnly => {
-            println!(
-                "{}",
-                "📡 Using GitHub API only (local git unavailable)"
-                    .yellow()
-                    .italic()
-            );
-            println!(
-                "{}",
-                "   (Some operations may be slower or limited)"
-                    .yellow()
-                    .italic()
-            );
-            println!();
-        }
-    }
-}
 
 fn display_unsupported_host(remote: &RemoteInfo) {
     match remote.host {
@@ -656,10 +592,71 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
     println!();
 }
 
-/// Print an operational notice to stderr.
-/// These are informational messages about what's happening during execution.
+/// Print a notice to stderr.
+/// All notices (both capability warnings and operational info) go through this function.
 pub fn print_notice(notice: Notice) {
     match notice {
+        // --- Backend capability notices ---
+        Notice::NoRemotes => {
+            eprintln!(
+                "{}",
+                "🤐 No remotes configured - what are you hiding?"
+                    .yellow()
+                    .italic()
+            );
+            eprintln!(
+                "{}",
+                "   (Or maybe... go do some OSS? 👀)".yellow().italic()
+            );
+            eprintln!();
+        }
+        Notice::UnsupportedHost { ref best_remote } => {
+            display_unsupported_host(best_remote);
+        }
+        Notice::MixedRemotes { ref hosts, count } => {
+            display_mixed_remotes(hosts, count);
+        }
+        Notice::UnreachableGitHub { ref remote } => {
+            eprintln!(
+                "{}",
+                "🔑 Found a GitHub remote, but can't talk to the API..."
+                    .yellow()
+                    .italic()
+            );
+            eprintln!(
+                "{}",
+                format!(
+                    "   Remote '{}' points to GitHub, but no luck connecting.",
+                    remote.name
+                )
+                .yellow()
+                .italic()
+            );
+            eprintln!(
+                "{}",
+                "   (Missing token? Network hiccup? I'll work with what I've got!)"
+                    .yellow()
+                    .italic()
+            );
+            eprintln!();
+        }
+        Notice::ApiOnly => {
+            eprintln!(
+                "{}",
+                "📡 Using GitHub API only (local git unavailable)"
+                    .yellow()
+                    .italic()
+            );
+            eprintln!(
+                "{}",
+                "   (Some operations may be slower or limited)"
+                    .yellow()
+                    .italic()
+            );
+            eprintln!();
+        }
+
+        // --- Operational notices ---
         Notice::CloningRepo { url } => {
             eprintln!("🔄 Cloning remote repository {url}...");
         }

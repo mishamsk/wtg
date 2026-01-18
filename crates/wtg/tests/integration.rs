@@ -17,14 +17,13 @@ async fn integration_identify_recent_commit() {
     let parsed_input = ParsedInput::new_local_query(ParsedQuery::Resolved(Query::GitCommit(
         "6146f62054c1eb14792be673275f8bc9a2e223f3".to_string(),
     )));
-    let resolved = resolve_backend(&parsed_input, false).expect("Failed to create backend");
-    let query = resolved
-        .backend
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = backend
         .disambiguate_query(parsed_input.query())
         .await
         .expect("Failed to disambiguate commit");
 
-    let result = resolve(resolved.backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query)
         .await
         .expect("Failed to identify commit");
 
@@ -39,14 +38,13 @@ async fn integration_identify_tag() {
 
     // Identify the first tag
     let parsed_input = ParsedInput::new_local_query(ParsedQuery::Unknown(TAG_NAME.to_string()));
-    let resolved = resolve_backend(&parsed_input, false).expect("Failed to create backend");
-    let query = resolved
-        .backend
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = backend
         .disambiguate_query(parsed_input.query())
         .await
         .expect("Failed to disambiguate tag");
 
-    let result = resolve(resolved.backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query)
         .await
         .expect("Failed to identify tag");
 
@@ -62,14 +60,13 @@ async fn integration_identify_file() {
         branch: "HEAD".to_string(),
         path: PathBuf::from("LICENSE"),
     }));
-    let resolved = resolve_backend(&parsed_input, false).expect("Failed to create backend");
-    let query = resolved
-        .backend
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = backend
         .disambiguate_query(parsed_input.query())
         .await
         .expect("Failed to disambiguate file");
 
-    let result = resolve(resolved.backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query)
         .await
         .expect("Failed to identify LICENSE");
 

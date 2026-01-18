@@ -11,9 +11,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use git2::{Commit, FetchOptions, Oid, RemoteCallbacks, Repository};
 use regex::Regex;
 
-use crate::backend::{Notice, NoticeCallback, no_notices};
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
+use crate::notice::{Notice, NoticeCallback, no_notices};
 use crate::parse_input::parse_github_repo_url;
 use crate::remote::{RemoteHost, RemoteInfo, RemoteKind};
 
