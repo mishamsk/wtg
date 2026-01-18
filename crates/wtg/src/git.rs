@@ -533,20 +533,9 @@ impl GitRepo {
         authors
     }
 
-    /// Get all tags in the repository
+    /// Get all tags in the repository.
     #[must_use]
     pub fn get_tags(&self) -> Vec<TagInfo> {
-        self.get_tags_with_releases(&[])
-    }
-
-    /// Get all tags in the repository, enriched with GitHub release info
-    #[must_use]
-    pub fn get_tags_with_releases(&self, github_releases: &[ReleaseInfo]) -> Vec<TagInfo> {
-        let release_map: std::collections::HashMap<String, &ReleaseInfo> = github_releases
-            .iter()
-            .map(|r| (r.tag_name.clone(), r))
-            .collect();
-
         self.with_repo(|repo| {
             let mut tags = Vec::new();
 
@@ -555,28 +544,15 @@ impl GitRepo {
                     if let Ok(obj) = repo.revparse_single(tag_name)
                         && let Ok(commit) = obj.peel_to_commit()
                     {
-                        let semver_info = parse_semver(tag_name);
-
-                        let (is_release, release_name, release_url, published_at) = release_map
-                            .get(tag_name)
-                            .map_or((false, None, None, None), |release| {
-                                (
-                                    true,
-                                    release.name.clone(),
-                                    Some(release.url.clone()),
-                                    release.published_at,
-                                )
-                            });
-
                         tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: commit.id().to_string(),
-                            semver_info,
+                            semver_info: parse_semver(tag_name),
                             created_at: git_time_to_datetime(commit.time()),
-                            is_release,
-                            release_name,
-                            release_url,
-                            published_at,
+                            is_release: false,
+                            release_name: None,
+                            release_url: None,
+                            published_at: None,
                         });
                     }
                 }
