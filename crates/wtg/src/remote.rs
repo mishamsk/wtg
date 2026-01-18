@@ -88,8 +88,8 @@ impl RemoteHost {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum RemoteKind {
-    Origin,   // Highest priority
-    Upstream, // Second priority
+    Upstream, // Highest priority (canonical repo in fork workflows)
+    Origin,   // Second priority
     Other,    // Lowest priority
 }
 
@@ -115,7 +115,7 @@ pub struct RemoteInfo {
 
 impl RemoteInfo {
     /// Priority for sorting (lower = higher priority).
-    /// Origin < Upstream < Other, within same kind: GitHub first.
+    /// Upstream < Origin < Other, within same kind: GitHub first.
     #[must_use]
     pub fn priority(&self) -> (RemoteKind, bool) {
         (self.kind, self.host != Some(RemoteHost::GitHub))
@@ -206,8 +206,9 @@ mod tests {
 
     #[test]
     fn test_remote_kind_ordering() {
-        assert!(RemoteKind::Origin < RemoteKind::Upstream);
-        assert!(RemoteKind::Upstream < RemoteKind::Other);
+        // Upstream has highest priority (lowest value)
+        assert!(RemoteKind::Upstream < RemoteKind::Origin);
+        assert!(RemoteKind::Origin < RemoteKind::Other);
     }
 
     #[test]
@@ -233,11 +234,13 @@ mod tests {
             host: Some(RemoteHost::GitHub),
         };
 
-        // GitHub origin should have highest priority (lowest tuple)
-        assert!(github_origin.priority() < gitlab_origin.priority());
-        assert!(github_origin.priority() < github_upstream.priority());
+        // Upstream beats origin (canonical repo in fork workflows)
+        assert!(github_upstream.priority() < github_origin.priority());
 
-        // Origin beats upstream even if upstream is GitHub
-        assert!(gitlab_origin.priority() < github_upstream.priority());
+        // Within same kind, GitHub beats non-GitHub
+        assert!(github_origin.priority() < gitlab_origin.priority());
+
+        // GitHub upstream beats non-GitHub origin
+        assert!(github_upstream.priority() < gitlab_origin.priority());
     }
 }

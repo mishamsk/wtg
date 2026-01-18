@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::Backend;
+use super::{Backend, NoticeCallback};
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo, looks_like_commit_hash};
 use crate::github::GitHubClient;
@@ -31,6 +31,11 @@ impl GitBackend {
     /// Get a reference to the underlying `GitRepo`.
     pub const fn git_repo(&self) -> &GitRepo {
         &self.repo
+    }
+
+    /// Set the notice callback for emitting operational messages.
+    pub fn set_notice_callback(&mut self, cb: NoticeCallback) {
+        self.repo.set_notice_callback(cb);
     }
 
     /// Find tags containing a commit and pick the best one.

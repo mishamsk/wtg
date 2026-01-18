@@ -11,6 +11,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use git2::{Commit, FetchOptions, Oid, RemoteCallbacks, Repository};
 use regex::Regex;
 
+use crate::backend::{Notice, NoticeCallback, no_notices};
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
 use crate::parse_input::parse_github_repo_url;
@@ -43,6 +44,8 @@ pub struct GitRepo {
     allow_fetch: bool,
     /// Tracks what's been synced from remote
     fetch_state: Mutex<FetchState>,
+    /// Callback for emitting notices
+    notice_cb: NoticeCallback,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +125,7 @@ impl GitRepo {
             gh_repo_info: None,
             allow_fetch: false,
             fetch_state: Mutex::new(FetchState::default()),
+            notice_cb: no_notices(),
         })
     }
 
@@ -138,12 +142,24 @@ impl GitRepo {
             gh_repo_info: None,
             allow_fetch: false,
             fetch_state: Mutex::new(FetchState::default()),
+            notice_cb: no_notices(),
         })
     }
 
     /// Open or clone a remote GitHub repository.
     /// Uses a cache directory (~/.cache/wtg/repos). Fetch is enabled by default.
     pub fn remote(gh_repo_info: GhRepoInfo) -> WtgResult<Self> {
+        Self::remote_with_notices(gh_repo_info, no_notices())
+    }
+
+    /// Open or clone a remote GitHub repository with a notice callback.
+    /// Uses a cache directory (~/.cache/wtg/repos). Fetch is enabled by default.
+    pub fn remote_with_notices(
+        gh_repo_info: GhRepoInfo,
+        notice_cb: NoticeCallback,
+    ) -> WtgResult<Self> {
+        let emit = |n: Notice| (notice_cb)(n);
+
         let cache_dir = get_cache_dir()?;
         let repo_cache_path =
             cache_dir.join(format!("{}/{}", gh_repo_info.owner(), gh_repo_info.repo()));
@@ -152,16 +168,23 @@ impl GitRepo {
         let full_metadata_synced =
             if repo_cache_path.exists() && Repository::open(&repo_cache_path).is_ok() {
                 // Cache exists - try to fetch to ensure metadata is fresh
-                match update_remote_repo(&repo_cache_path) {
+                match update_remote_repo(&repo_cache_path, &emit) {
                     Ok(()) => true,
                     Err(e) => {
-                        eprintln!("⚠️  Failed to update cached repo: {e}");
+                        emit(Notice::CacheUpdateFailed {
+                            error: e.to_string(),
+                        });
                         false // Continue with stale cache
                     }
                 }
             } else {
                 // Clone it (with filter=blob:none for efficiency)
-                clone_remote_repo(gh_repo_info.owner(), gh_repo_info.repo(), &repo_cache_path)?;
+                clone_remote_repo(
+                    gh_repo_info.owner(),
+                    gh_repo_info.repo(),
+                    &repo_cache_path,
+                    &emit,
+                )?;
                 true // Fresh clone has all metadata
             };
 
@@ -183,6 +206,7 @@ impl GitRepo {
                 full_metadata_synced,
                 ..Default::default()
             }),
+            notice_cb,
         })
     }
 
@@ -207,6 +231,16 @@ impl GitRepo {
     /// Use this to enable `--fetch` flag for local repos.
     pub const fn set_allow_fetch(&mut self, allow: bool) {
         self.allow_fetch = allow;
+    }
+
+    /// Set the notice callback for emitting operational messages.
+    pub fn set_notice_callback(&mut self, cb: NoticeCallback) {
+        self.notice_cb = cb;
+    }
+
+    /// Emit a notice via the callback.
+    fn emit(&self, notice: Notice) {
+        (self.notice_cb)(notice);
     }
 
     /// Get a reference to the stored GitHub repo info (owner/repo) if explicitly set.
@@ -259,9 +293,7 @@ impl GitRepo {
 
         // 4. For shallow repos, warn and prefer API fallback to avoid huge downloads
         if self.is_shallow() {
-            eprintln!(
-                "⚠️  Shallow repository detected: using API for commit lookup (use --fetch to override)"
-            );
+            self.emit(Notice::ShallowRepoDetected);
             return Ok(None);
         }
 
@@ -709,7 +741,7 @@ impl GitRepo {
 
     /// Get the GitHub remote info.
     /// Returns stored `gh_repo_info` if set, otherwise extracts from git remotes
-    /// using the `remotes()` API with priority ordering (origin > upstream > other,
+    /// using the `remotes()` API with priority ordering (upstream > origin > other,
     /// GitHub remotes first within each kind).
     #[must_use]
     pub fn github_remote(&self) -> Option<GhRepoInfo> {
@@ -888,7 +920,12 @@ fn get_cache_dir() -> WtgResult<PathBuf> {
 }
 
 /// Clone a remote repository using subprocess with filter=blob:none, falling back to git2 if needed
-fn clone_remote_repo(owner: &str, repo: &str, target_path: &Path) -> WtgResult<()> {
+fn clone_remote_repo(
+    owner: &str,
+    repo: &str,
+    target_path: &Path,
+    emit: &dyn Fn(Notice),
+) -> WtgResult<()> {
     // Create parent directory
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)?;
@@ -896,18 +933,22 @@ fn clone_remote_repo(owner: &str, repo: &str, target_path: &Path) -> WtgResult<(
 
     let repo_url = format!("https://github.com/{owner}/{repo}.git");
 
-    eprintln!("🔄 Cloning remote repository {repo_url}...");
+    emit(Notice::CloningRepo {
+        url: repo_url.clone(),
+    });
 
     // Try subprocess with --filter=blob:none first (requires Git 2.17+)
     match clone_with_filter(&repo_url, target_path) {
         Ok(()) => {
-            eprintln!("✅ Repository cloned successfully (using filter)");
+            emit(Notice::CloneSucceeded { used_filter: true });
             Ok(())
         }
         Err(e) => {
-            eprintln!("⚠️  Filter clone failed ({e}), falling back to bare clone...");
+            emit(Notice::CloneFallbackToBare {
+                error: e.to_string(),
+            });
             // Fall back to git2 bare clone
-            clone_bare_with_git2(&repo_url, target_path)
+            clone_bare_with_git2(&repo_url, target_path, emit)
         }
     }
 }
@@ -937,7 +978,11 @@ fn clone_with_filter(repo_url: &str, target_path: &Path) -> WtgResult<()> {
 }
 
 /// Clone bare repository using git2 (fallback)
-fn clone_bare_with_git2(repo_url: &str, target_path: &Path) -> WtgResult<()> {
+fn clone_bare_with_git2(
+    repo_url: &str,
+    target_path: &Path,
+    emit: &dyn Fn(Notice),
+) -> WtgResult<()> {
     // Clone without progress output for cleaner UX
     let callbacks = RemoteCallbacks::new();
 
@@ -953,24 +998,24 @@ fn clone_bare_with_git2(repo_url: &str, target_path: &Path) -> WtgResult<()> {
     // This gets all commits, branches, and tags without checking out files
     builder.clone(repo_url, target_path)?;
 
-    eprintln!("✅ Repository cloned successfully (using bare clone)");
+    emit(Notice::CloneSucceeded { used_filter: false });
 
     Ok(())
 }
 
 /// Update an existing cloned remote repository
-fn update_remote_repo(repo_path: &Path) -> WtgResult<()> {
-    eprintln!("🔄 Updating cached repository...");
+fn update_remote_repo(repo_path: &Path, emit: &dyn Fn(Notice)) -> WtgResult<()> {
+    emit(Notice::UpdatingCache);
 
     // Try subprocess fetch first (works for both filter and non-filter repos)
     match fetch_with_subprocess(repo_path) {
         Ok(()) => {
-            eprintln!("✅ Repository updated");
+            emit(Notice::CacheUpdated);
             Ok(())
         }
         Err(_) => {
             // Fall back to git2
-            fetch_with_git2(repo_path)
+            fetch_with_git2(repo_path, emit)
         }
     }
 }
@@ -1009,7 +1054,7 @@ fn build_fetch_args(repo_path: &Path) -> WtgResult<Vec<String>> {
 }
 
 /// Fetch updates using git2 (fallback)
-fn fetch_with_git2(repo_path: &Path) -> WtgResult<()> {
+fn fetch_with_git2(repo_path: &Path, emit: &dyn Fn(Notice)) -> WtgResult<()> {
     let repo = Repository::open(repo_path)?;
 
     // Find the origin remote
@@ -1030,7 +1075,7 @@ fn fetch_with_git2(repo_path: &Path) -> WtgResult<()> {
         None,
     )?;
 
-    eprintln!("✅ Repository updated");
+    emit(Notice::CacheUpdated);
 
     Ok(())
 }

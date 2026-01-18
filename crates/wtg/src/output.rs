@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crossterm::style::Stylize;
 use octocrab::models::IssueState;
 
-use crate::backend::BackendNotice;
+use crate::backend::{BackendNotice, Notice};
 use crate::error::WtgResult;
 use crate::git::{CommitInfo, TagInfo};
 use crate::github::PullRequestInfo;
@@ -654,4 +654,43 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
             .italic()
     );
     println!();
+}
+
+/// Print an operational notice to stderr.
+/// These are informational messages about what's happening during execution.
+pub fn print_notice(notice: Notice) {
+    match notice {
+        Notice::CloningRepo { url } => {
+            eprintln!("🔄 Cloning remote repository {url}...");
+        }
+        Notice::CloneSucceeded { used_filter } => {
+            if used_filter {
+                eprintln!("✅ Repository cloned successfully (using filter)");
+            } else {
+                eprintln!("✅ Repository cloned successfully (using bare clone)");
+            }
+        }
+        Notice::CloneFallbackToBare { error } => {
+            eprintln!("⚠️  Filter clone failed ({error}), falling back to bare clone...");
+        }
+        Notice::CacheUpdateFailed { error } => {
+            eprintln!("⚠️  Failed to update cached repo: {error}");
+        }
+        Notice::ShallowRepoDetected => {
+            eprintln!(
+                "⚠️  Shallow repository detected: using API for commit lookup (use --fetch to override)"
+            );
+        }
+        Notice::UpdatingCache => {
+            eprintln!("🔄 Updating cached repository...");
+        }
+        Notice::CacheUpdated => {
+            eprintln!("✅ Repository updated");
+        }
+        Notice::CrossProjectFallbackToApi { owner, repo, error } => {
+            eprintln!(
+                "⚠️  Cannot access git for {owner}/{repo}: {error}. Using API only for cross-project refs."
+            );
+        }
+    }
 }

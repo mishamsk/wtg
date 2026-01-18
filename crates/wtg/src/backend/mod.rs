@@ -151,7 +151,7 @@ pub enum BackendNotice {
     /// Single host type detected but it's not GitHub
     /// (all remotes point to GitLab, Bitbucket, or unknown host)
     UnsupportedHost {
-        /// The best remote we found (by priority: origin > upstream > other)
+        /// The best remote we found (by priority: upstream > origin > other)
         best_remote: RemoteInfo,
     },
     /// Multiple different hosts detected, none of them GitHub
@@ -180,6 +180,45 @@ pub struct ResolvedBackend {
     pub notice: Option<BackendNotice>,
 }
 
+// ============================================
+// Operational notices (emitted during execution)
+// ============================================
+
+/// Notices emitted during git/backend operations.
+/// These are informational messages about what's happening.
+#[derive(Debug, Clone)]
+pub enum Notice {
+    /// Failed to update a cached repository
+    CacheUpdateFailed { error: String },
+    /// Repository is shallow, falling back to API
+    ShallowRepoDetected,
+    /// Starting to clone a remote repository
+    CloningRepo { url: String },
+    /// Clone succeeded
+    CloneSucceeded { used_filter: bool },
+    /// Filter clone failed, falling back to bare clone
+    CloneFallbackToBare { error: String },
+    /// Starting to update a cached repository
+    UpdatingCache,
+    /// Cache update completed
+    CacheUpdated,
+    /// Cross-project reference falling back to API-only
+    CrossProjectFallbackToApi {
+        owner: String,
+        repo: String,
+        error: String,
+    },
+}
+
+/// Callback for emitting notices during operations.
+pub type NoticeCallback = std::sync::Arc<dyn Fn(Notice) + Send + Sync>;
+
+/// Create a no-op callback for when notices should be ignored.
+#[must_use]
+pub fn no_notices() -> NoticeCallback {
+    std::sync::Arc::new(|_| {})
+}
+
 /// Resolve the best backend based on available resources.
 ///
 /// # Arguments
@@ -195,17 +234,28 @@ pub fn resolve_backend(
     parsed_input: &ParsedInput,
     allow_user_repo_fetch: bool,
 ) -> WtgResult<ResolvedBackend> {
+    resolve_backend_with_notices(parsed_input, allow_user_repo_fetch, no_notices())
+}
+
+/// Resolve the best backend based on available resources, with a notice callback.
+pub fn resolve_backend_with_notices(
+    parsed_input: &ParsedInput,
+    allow_user_repo_fetch: bool,
+    notice_cb: NoticeCallback,
+) -> WtgResult<ResolvedBackend> {
     // Case 1: Explicit repo info provided (from URL/flags)
     if let Some(repo_info) = parsed_input.gh_repo_info() {
         // User explicitly provided GitHub info - GitHub client failure is a hard error
         let github = GitHubBackend::new(repo_info.clone()).ok_or(WtgError::GitHubClientFailed)?;
 
         // Try to get local git repo for combined backend
-        match GitRepo::remote(repo_info.clone()) {
+        match GitRepo::remote_with_notices(repo_info.clone(), notice_cb.clone()) {
             Ok(git_repo) => {
                 let git = GitBackend::new(git_repo);
+                let mut combined = CombinedBackend::new(git, github);
+                combined.set_notice_callback(notice_cb);
                 Ok(ResolvedBackend {
-                    backend: Box::new(CombinedBackend::new(git, github)),
+                    backend: Box::new(combined),
                     notice: None,
                 })
             }
@@ -219,17 +269,21 @@ pub fn resolve_backend(
         }
     } else {
         // Case 2: Local repo detection
-        resolve_local_backend(allow_user_repo_fetch)
+        resolve_local_backend_with_notices(allow_user_repo_fetch, notice_cb)
     }
 }
 
-fn resolve_local_backend(allow_user_repo_fetch: bool) -> WtgResult<ResolvedBackend> {
+fn resolve_local_backend_with_notices(
+    allow_user_repo_fetch: bool,
+    notice_cb: NoticeCallback,
+) -> WtgResult<ResolvedBackend> {
     let mut git_repo = GitRepo::open()?;
     if allow_user_repo_fetch {
         git_repo.set_allow_fetch(true);
     }
+    git_repo.set_notice_callback(notice_cb.clone());
 
-    // Collect and sort remotes by priority (origin > upstream > other, GitHub first)
+    // Collect and sort remotes by priority (upstream > origin > other, GitHub first)
     let mut remotes: Vec<RemoteInfo> = git_repo.remotes().collect();
     remotes.sort_by_key(RemoteInfo::priority);
 
@@ -255,8 +309,10 @@ fn resolve_local_backend(allow_user_repo_fetch: bool) -> WtgResult<ResolvedBacke
 
             if let Some(github) = GitHubBackend::new(repo_info) {
                 // Full GitHub support!
+                let mut combined = CombinedBackend::new(git, github);
+                combined.set_notice_callback(notice_cb);
                 return Ok(ResolvedBackend {
-                    backend: Box::new(CombinedBackend::new(git, github)),
+                    backend: Box::new(combined),
                     notice: None,
                 });
             }

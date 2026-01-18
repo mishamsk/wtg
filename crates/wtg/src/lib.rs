@@ -2,7 +2,9 @@ use std::{env, ffi::OsString};
 
 use clap::Parser;
 
-use crate::backend::resolve_backend;
+use std::sync::Arc;
+
+use crate::backend::resolve_backend_with_notices;
 use crate::cli::Cli;
 use crate::error::{WtgError, WtgResult};
 use crate::resolution::resolve;
@@ -66,8 +68,11 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
     let parsed_input = cli.parse_input()?;
 
+    // Create notice callback for operational messages
+    let notice_cb = Arc::new(output::print_notice);
+
     // Create the backend based on available resources
-    let resolved = resolve_backend(&parsed_input, cli.fetch)?;
+    let resolved = resolve_backend_with_notices(&parsed_input, cli.fetch, notice_cb)?;
 
     // Display backend notice if operating in reduced-functionality mode
     if let Some(notice) = &resolved.notice {

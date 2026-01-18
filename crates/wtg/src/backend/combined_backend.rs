@@ -12,7 +12,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::backend::{Backend, git_backend::GitBackend, github_backend::GitHubBackend};
+use crate::backend::{
+    Backend, Notice, NoticeCallback, git_backend::GitBackend, github_backend::GitHubBackend,
+    no_notices,
+};
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
@@ -31,13 +34,29 @@ use crate::parse_input::{ParsedQuery, Query};
 pub(crate) struct CombinedBackend {
     git: GitBackend,
     github: GitHubBackend,
+    notice_cb: NoticeCallback,
 }
 
 impl CombinedBackend {
     /// Create a new `CombinedBackend` from git and GitHub backends.
     #[must_use]
-    pub(crate) const fn new(git: GitBackend, github: GitHubBackend) -> Self {
-        Self { git, github }
+    pub(crate) fn new(git: GitBackend, github: GitHubBackend) -> Self {
+        Self {
+            git,
+            github,
+            notice_cb: no_notices(),
+        }
+    }
+
+    /// Set the notice callback for emitting operational messages.
+    pub(crate) fn set_notice_callback(&mut self, cb: NoticeCallback) {
+        self.notice_cb = cb.clone();
+        self.git.set_notice_callback(cb);
+    }
+
+    /// Emit a notice via the callback.
+    fn emit(&self, notice: Notice) {
+        (self.notice_cb)(notice);
     }
 
     /// Find the best release/tag for a commit using both local and API data.
@@ -211,11 +230,11 @@ impl Backend for CombinedBackend {
                 Some(Box::new(Self::new(git, github)))
             }
             Err(e) => {
-                eprintln!(
-                    "⚠️  Cannot access git for {}/{}: {e}. Using API only for cross-project refs.",
-                    pr_repo.owner(),
-                    pr_repo.repo()
-                );
+                self.emit(Notice::CrossProjectFallbackToApi {
+                    owner: pr_repo.owner().to_string(),
+                    repo: pr_repo.repo().to_string(),
+                    error: e.to_string(),
+                });
                 Some(Box::new(github))
             }
         }

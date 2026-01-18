@@ -442,6 +442,7 @@ impl GitHubClient {
                             }
 
                             // Check if we already have this PR
+                            // Note: GitHub API returns PRs as issues, so issue.number is the PR number
                             if !closing_prs.iter().any(|p| {
                                 p.number == issue.number
                                     && p.repo_info
