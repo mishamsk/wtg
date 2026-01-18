@@ -4,7 +4,7 @@ members = ["crates/wtg", "crates/wtg-python"]
 default-members = ["crates/wtg"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "A snarky but helpful CLI tool to identify git commits, issues, PRs and file changes, and tell you which release they shipped in"
 authors = ["Mike Perlov"]
@@ -28,6 +28,9 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
+# Disable some strange nursery lints
+redundant_pub_crate = "allow"
+
 [workspace.dependencies]
 # Own crates
 wtg-cli = { path = "crates/wtg" }
@@ -35,7 +38,8 @@ wtg-cli = { path = "crates/wtg" }
 # External crates
 clap = { version = "4.5", features = ["derive", "env", "unicode", "wrap_help"] }
 git2 = "0.20.2"
-octocrab = "0.47.0"
+http = "1.4"
+octocrab = "0.48.0"
 crossterm = "0.29.0"
 tokio = { version = "1.42", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -46,6 +50,8 @@ pyo3 = { version = "0.27", features = ["extension-module"] }
 regex = "1.12"
 percent-encoding = "2.3"
 url = "2.5"
+strum = { version = "0.27.2", features = ["derive", "strum_macros"] }
+async-trait = "0.1"
 
 # Test dependencies
 rstest = "0.26"

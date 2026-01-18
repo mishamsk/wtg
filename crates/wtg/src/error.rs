@@ -1,33 +1,33 @@
 use crossterm::style::Stylize;
+use http::StatusCode;
+use octocrab::Error as OctoError;
 use std::fmt;
 
-pub type Result<T> = std::result::Result<T, WtgError>;
+pub type WtgResult<T> = std::result::Result<T, WtgError>;
 
-/// Check if an octocrab error is a rate limit error
-fn is_rate_limit_error(err: &octocrab::Error) -> bool {
-    if let octocrab::Error::GitHub { source, .. } = err {
-        // HTTP 403 with rate limit message, or HTTP 429 (secondary rate limit)
-        let status = source.status_code.as_u16();
-        (status == 403
-            && (source.message.contains("rate limit") || source.message.contains("API rate limit")))
-            || status == 429
-    } else {
-        false
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, strum::EnumIs)]
 pub enum WtgError {
+    EmptyInput,
     NotInGitRepo,
     NotFound(String),
+    Unsupported(String),
     Git(git2::Error),
-    GitHub(octocrab::Error),
+    GhConnectionLost,
+    GhRateLimit(OctoError),
+    GhSaml(OctoError),
+    GitHub(OctoError),
     MultipleMatches(Vec<String>),
     Io(std::io::Error),
     Cli { message: String, code: i32 },
+    Timeout,
+    NotGitHubUrl(String),
+    MalformedGitHubUrl(String),
+    SecurityRejection(String),
+    GitHubClientFailed,
 }
 
 impl fmt::Display for WtgError {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotInGitRepo => {
@@ -55,31 +55,77 @@ impl fmt::Display for WtgError {
                 writeln!(f)?;
                 writeln!(f, "   {}: {}", "Input was".yellow(), input.as_str().cyan())
             }
-            Self::Git(e) => write!(f, "Git error: {e}"),
-            Self::GitHub(e) => {
-                if is_rate_limit_error(e) {
-                    writeln!(
-                        f,
-                        "{}",
-                        "⏱️  Whoa there, speed demon! GitHub says you're moving too fast."
-                            .yellow()
-                            .bold()
-                    )?;
-                    writeln!(f)?;
-                    writeln!(
-                        f,
-                        "   {}",
-                        "You've hit the rate limit. Maybe take a coffee break? ☕".yellow()
-                    )?;
-                    writeln!(
-                        f,
-                        "   {}",
-                        "Or set a GITHUB_TOKEN to get higher limits.".yellow()
-                    )
-                } else {
-                    write!(f, "GitHub error: {e}")
-                }
+            Self::Unsupported(operation) => {
+                writeln!(f, "{}", "🚫 Can't do that here!".yellow().bold())?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {} is not supported with the current backend.",
+                    operation.as_str().cyan()
+                )
             }
+            Self::Git(e) => write!(f, "Git error: {e}"),
+            Self::GhConnectionLost => {
+                writeln!(
+                    f,
+                    "{}",
+                    "📡 Houston, we have a problem! Connection lost mid-flight!"
+                        .red()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "GitHub was there a second ago, now it's playing hide and seek. 👻".red()
+                )?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Check your internet connection and try again!".yellow()
+                )
+            }
+            Self::GhRateLimit(_) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "⏱️  Whoa there, speed demon! GitHub says you're moving too fast."
+                        .yellow()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "You've hit the rate limit. Maybe take a coffee break? ☕".yellow()
+                )?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Or set a GITHUB_TOKEN to get higher limits.".yellow()
+                )
+            }
+            Self::GhSaml(_) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🔐 Halt! Who goes there? Your GitHub org wants to see some ID!"
+                        .red()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Looks like SAML SSO is standing between you and your data. 🚧".red()
+                )?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Try authenticating your GITHUB_TOKEN with SAML first!".red()
+                )
+            }
+            Self::GitHub(e) => write!(f, "GitHub error: {e}"),
             Self::MultipleMatches(types) => {
                 writeln!(f, "{}", "💥 OH MY, YOU BLEW ME UP!".red().bold())?;
                 writeln!(f)?;
@@ -97,6 +143,103 @@ impl fmt::Display for WtgError {
             }
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Cli { message, .. } => write!(f, "{message}"),
+            Self::Timeout => {
+                writeln!(
+                    f,
+                    "{}",
+                    "⏰ Time's up! The internet took a nap.".red().bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Did you forget to pay your internet bill? 💸".red()
+                )
+            }
+            Self::NotGitHubUrl(url) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🤨 That's a URL alright, but it's not GitHub!"
+                        .yellow()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}: {}", "You gave me".yellow(), url.clone().cyan())?;
+                writeln!(f)?;
+                writeln!(f, "   {}", "I only speak GitHub URLs, buddy! 🐙".yellow())
+            }
+            Self::MalformedGitHubUrl(url) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "😵 That GitHub URL is more broken than my ex's promises!"
+                        .red()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}: {}", "You gave me".red(), url.clone().cyan())?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Expected something like: https://github.com/owner/repo/issues/123".yellow()
+                )?;
+                writeln!(f, "   {}", "But this? This is just sad. 😢".red())
+            }
+            Self::SecurityRejection(reason) => {
+                writeln!(f, "{}", "🚨 Whoa there! Security alert!".red().bold())?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "I can't process that input for personal reasons. 🛡️".red()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}: {}", "Reason".yellow(), reason.clone())?;
+                writeln!(f)?;
+                writeln!(f, "   {}", "Please, try something safer? 🙏".yellow())
+            }
+            Self::EmptyInput => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🫥 Excuse me, but I can't read minds!".yellow().bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "You gave me... nothing. Nada. Zilch. The void! 👻".yellow()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Try giving me something to work with, please!".yellow()
+                )
+            }
+            Self::GitHubClientFailed => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🔑 Can't connect to GitHub! Something's blocking the path..."
+                        .red()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "You explicitly asked for GitHub data, but I can't reach it. 😞".red()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Check your GITHUB_TOKEN and network connection!".yellow()
+                )
+            }
         }
     }
 }
@@ -109,8 +252,30 @@ impl From<git2::Error> for WtgError {
     }
 }
 
-impl From<octocrab::Error> for WtgError {
-    fn from(err: octocrab::Error) -> Self {
+impl From<OctoError> for WtgError {
+    fn from(err: OctoError) -> Self {
+        if let OctoError::GitHub { ref source, .. } = err {
+            match source.status_code {
+                StatusCode::TOO_MANY_REQUESTS => return Self::GhRateLimit(err),
+                StatusCode::FORBIDDEN => {
+                    let msg_lower = source.message.to_ascii_lowercase();
+
+                    if msg_lower.to_ascii_lowercase().contains("saml") {
+                        return Self::GhSaml(err);
+                    }
+
+                    if msg_lower.contains("rate limit") {
+                        return Self::GhRateLimit(err);
+                    }
+
+                    return Self::GitHub(err);
+                }
+                _ => {
+                    return Self::GitHub(err);
+                }
+            }
+        }
+
         Self::GitHub(err)
     }
 }

@@ -26,6 +26,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Security
 -
 
+## [0.2.0] - 2025-01-18
+
+### Added
+- Backend abstraction with Git, GitHub, and combined implementations for local-first resolution with API fallback.
+- Resolution layer to identify issues, PRs, commits, files, and tags from structured inputs.
+- `--fetch` flag to opt-in into automatically fetching from remote when running in a local checkout (useful to ensure up-to-date tags).
+
+### Changed
+- GitHub repository detection now prefers upstream remotes and iterates until a GitHub remote is found.
+- Remote repository handling uses lazy fetches, improved release sorting, and a ls-remote check to avoid unnecessary API calls.
+- GitHub client initialization is lazy to avoid unnecessary auth setup for local-only queries.
+
+### Fixed
+- Fallback to anonymous GitHub client on public repo's in SAML protected orgs, when auth fails.
+- Properly identify closing PRs when multiple PRs reference the same issue.
+- Updated GitHub API client to latest version to fix issues with new timeline events.
+- Commit and issue URL resolution across repositories now finds the correct target more reliably.
+- Closing PR identification now works for cross-project references.
+
+### Security
+- New input parsing pipeline that standardizes queries and makes GitHub URL handling more robust and secure.
+
 ## [0.1.1] - 2025-11-07
 
 ### Added

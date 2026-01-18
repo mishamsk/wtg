@@ -1,14 +1,51 @@
-use crate::error::{Result, WtgError};
-use crate::github::ReleaseInfo;
-use git2::{Commit, Oid, Repository, Time};
-use regex::Regex;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::{
+    collections::HashSet,
+    fs,
+    io::{Error as IoError, ErrorKind},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{Arc, Mutex},
+};
 
-#[derive(Clone)]
+use chrono::{DateTime, TimeZone, Utc};
+use git2::{Commit, FetchOptions, Oid, RemoteCallbacks, Repository};
+
+use crate::error::{WtgError, WtgResult};
+use crate::github::{GhRepoInfo, ReleaseInfo};
+use crate::notice::{Notice, NoticeCallback, no_notices};
+use crate::parse_input::parse_github_repo_url;
+use crate::remote::{RemoteHost, RemoteInfo, RemoteKind};
+pub use crate::semver::{SemverInfo, parse_semver};
+
+/// Tracks what data has been synchronized from remote.
+///
+/// This helps avoid redundant network calls:
+/// - If `full_metadata_synced`, we've done a filter clone or full fetch, so all refs are known
+/// - If a commit is in `fetched_commits`, we've already fetched it individually
+/// - If `tags_synced`, we've fetched all tags
+#[derive(Default)]
+struct FetchState {
+    /// True if we did a full metadata fetch (filter clone or fetch --all)
+    full_metadata_synced: bool,
+    /// Specific commits we've fetched individually
+    fetched_commits: HashSet<String>,
+    /// True if we've fetched all tags
+    tags_synced: bool,
+}
+
 pub struct GitRepo {
     repo: Arc<Mutex<Repository>>,
     path: PathBuf,
+    /// Remote URL for fetching
+    remote_url: Option<String>,
+    /// GitHub repository info (owner/repo) if explicitly set
+    gh_repo_info: Option<GhRepoInfo>,
+    /// Whether fetching is allowed
+    allow_fetch: bool,
+    /// Tracks what's been synced from remote
+    fetch_state: Mutex<FetchState>,
+    /// Callback for emitting notices
+    notice_cb: NoticeCallback,
 }
 
 #[derive(Debug, Clone)]
@@ -17,20 +54,12 @@ pub struct CommitInfo {
     pub short_hash: String,
     pub message: String,
     pub message_lines: usize,
+    pub commit_url: Option<String>,
     pub author_name: String,
-    pub author_email: String,
-    pub date: String,
-    pub timestamp: i64, // Unix timestamp for the commit
-}
-
-impl CommitInfo {
-    /// Get the commit date as an RFC3339 string for GitHub API filtering
-    #[must_use]
-    pub fn date_rfc3339(&self) -> String {
-        use chrono::{DateTime, TimeZone, Utc};
-        let datetime: DateTime<Utc> = Utc.timestamp_opt(self.timestamp, 0).unwrap();
-        datetime.to_rfc3339()
-    }
+    pub author_email: Option<String>,
+    pub author_login: Option<String>,
+    pub author_url: Option<String>,
+    pub date: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,42 +73,130 @@ pub struct FileInfo {
 pub struct TagInfo {
     pub name: String,
     pub commit_hash: String,
-    pub is_semver: bool,
     pub semver_info: Option<SemverInfo>,
-    pub is_release: bool,             // Whether this is a GitHub release
+    pub created_at: DateTime<Utc>, // Timestamp of the commit the tag points to
+    pub is_release: bool,          // Whether this is a GitHub release
     pub release_name: Option<String>, // GitHub release name (if is_release)
-    pub release_url: Option<String>,  // GitHub release URL (if is_release)
-    pub published_at: Option<String>, // GitHub release published date (if is_release)
+    pub release_url: Option<String>, // GitHub release URL (if is_release)
+    pub published_at: Option<DateTime<Utc>>, // GitHub release published date (if is_release)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SemverInfo {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: Option<u32>,
-    pub build: Option<u32>,
-    pub pre_release: Option<String>,
-    pub build_metadata: Option<String>,
+impl TagInfo {
+    /// Whether this is a semver tag
+    #[must_use]
+    pub const fn is_semver(&self) -> bool {
+        self.semver_info.is_some()
+    }
+
+    /// Whether this tag represents a stable release (no pre-release, no build metadata)
+    #[must_use]
+    pub const fn is_stable_semver(&self) -> bool {
+        if let Some(semver) = &self.semver_info {
+            semver.pre_release.is_none()
+                && semver.build_metadata.is_none()
+                && semver.build.is_none()
+        } else {
+            false
+        }
+    }
 }
 
 impl GitRepo {
-    /// Open the git repository from the current directory
-    pub fn open() -> Result<Self> {
+    /// Open the git repository from the current directory.
+    /// Fetch is disabled by default for local repos.
+    pub fn open() -> WtgResult<Self> {
         let repo = Repository::discover(".").map_err(|_| WtgError::NotInGitRepo)?;
         let path = repo.path().to_path_buf();
+        let remote_url = Self::extract_remote_url(&repo);
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
             path,
+            remote_url,
+            gh_repo_info: None,
+            allow_fetch: false,
+            fetch_state: Mutex::new(FetchState::default()),
+            notice_cb: no_notices(),
         })
     }
 
-    /// Open the git repository from a specific path
-    pub fn from_path(path: &Path) -> Result<Self> {
+    /// Open the git repository from a specific path.
+    /// Fetch is disabled by default.
+    pub fn from_path(path: &Path) -> WtgResult<Self> {
         let repo = Repository::open(path).map_err(|_| WtgError::NotInGitRepo)?;
         let repo_path = repo.path().to_path_buf();
+        let remote_url = Self::extract_remote_url(&repo);
         Ok(Self {
             repo: Arc::new(Mutex::new(repo)),
             path: repo_path,
+            remote_url,
+            gh_repo_info: None,
+            allow_fetch: false,
+            fetch_state: Mutex::new(FetchState::default()),
+            notice_cb: no_notices(),
+        })
+    }
+
+    /// Open or clone a remote GitHub repository.
+    /// Uses a cache directory (~/.cache/wtg/repos). Fetch is enabled by default.
+    pub fn remote(gh_repo_info: GhRepoInfo) -> WtgResult<Self> {
+        Self::remote_with_notices(gh_repo_info, no_notices())
+    }
+
+    /// Open or clone a remote GitHub repository with a notice callback.
+    /// Uses a cache directory (~/.cache/wtg/repos). Fetch is enabled by default.
+    pub fn remote_with_notices(
+        gh_repo_info: GhRepoInfo,
+        notice_cb: NoticeCallback,
+    ) -> WtgResult<Self> {
+        let emit = |n: Notice| (notice_cb)(n);
+
+        let cache_dir = get_cache_dir()?;
+        let repo_cache_path =
+            cache_dir.join(format!("{}/{}", gh_repo_info.owner(), gh_repo_info.repo()));
+
+        // Check if already cloned
+        let full_metadata_synced =
+            if repo_cache_path.exists() && Repository::open(&repo_cache_path).is_ok() {
+                // Cache exists - try to fetch to ensure metadata is fresh
+                match update_remote_repo(&repo_cache_path, &emit) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        emit(Notice::CacheUpdateFailed {
+                            error: e.to_string(),
+                        });
+                        false // Continue with stale cache
+                    }
+                }
+            } else {
+                // Clone it (with filter=blob:none for efficiency)
+                clone_remote_repo(
+                    gh_repo_info.owner(),
+                    gh_repo_info.repo(),
+                    &repo_cache_path,
+                    &emit,
+                )?;
+                true // Fresh clone has all metadata
+            };
+
+        let repo = Repository::open(&repo_cache_path).map_err(|_| WtgError::NotInGitRepo)?;
+        let path = repo.path().to_path_buf();
+        let remote_url = Some(format!(
+            "https://github.com/{}/{}.git",
+            gh_repo_info.owner(),
+            gh_repo_info.repo()
+        ));
+
+        Ok(Self {
+            repo: Arc::new(Mutex::new(repo)),
+            path,
+            remote_url,
+            gh_repo_info: Some(gh_repo_info),
+            allow_fetch: true,
+            fetch_state: Mutex::new(FetchState {
+                full_metadata_synced,
+                ..Default::default()
+            }),
+            notice_cb,
         })
     }
 
@@ -89,14 +206,137 @@ impl GitRepo {
         &self.path
     }
 
+    /// Check if this is a shallow repository (internal use only)
+    fn is_shallow(&self) -> bool {
+        self.with_repo(git2::Repository::is_shallow)
+    }
+
+    /// Get the remote URL for fetching
+    #[must_use]
+    pub fn remote_url(&self) -> Option<&str> {
+        self.remote_url.as_deref()
+    }
+
+    /// Set whether fetching is allowed.
+    /// Use this to enable `--fetch` flag for local repos.
+    pub const fn set_allow_fetch(&mut self, allow: bool) {
+        self.allow_fetch = allow;
+    }
+
+    /// Set the notice callback for emitting operational messages.
+    pub fn set_notice_callback(&mut self, cb: NoticeCallback) {
+        self.notice_cb = cb;
+    }
+
+    /// Emit a notice via the callback.
+    fn emit(&self, notice: Notice) {
+        (self.notice_cb)(notice);
+    }
+
+    /// Get a reference to the stored GitHub repo info (owner/repo) if explicitly set.
+    #[must_use]
+    pub const fn gh_repo_info(&self) -> Option<&GhRepoInfo> {
+        self.gh_repo_info.as_ref()
+    }
+
     fn with_repo<T>(&self, f: impl FnOnce(&Repository) -> T) -> T {
         let repo = self.repo.lock().expect("git repository mutex poisoned");
         f(&repo)
     }
 
-    /// Try to find a commit by hash (can be short or full)
+    /// Collect all remotes from a repository as `RemoteInfo` structs.
+    fn collect_remotes(repo: &Repository) -> Vec<RemoteInfo> {
+        let remote_names: Vec<String> = repo
+            .remotes()
+            .map(|names| names.iter().flatten().map(str::to_string).collect())
+            .unwrap_or_default();
+
+        remote_names
+            .into_iter()
+            .filter_map(|name| {
+                let remote = repo.find_remote(&name).ok()?;
+                let url = remote.url()?.to_string();
+                Some(RemoteInfo {
+                    name: name.clone(),
+                    kind: RemoteKind::from_name(&name),
+                    host: RemoteHost::from_url(&url),
+                    url,
+                })
+            })
+            .collect()
+    }
+
+    /// Extract remote URL from repository, preferring upstream over origin.
+    fn extract_remote_url(repo: &Repository) -> Option<String> {
+        let mut remotes = Self::collect_remotes(repo);
+        remotes.sort_by_key(RemoteInfo::priority);
+        remotes.into_iter().next().map(|r| r.url)
+    }
+
+    /// Find a commit by hash (can be short or full).
+    /// If `allow_fetch` is true and the commit isn't found locally, attempts to fetch it.
+    pub fn find_commit(&self, hash_str: &str) -> WtgResult<Option<CommitInfo>> {
+        // 1. Try local first
+        if let Some(commit) = self.find_commit_local(hash_str) {
+            return Ok(Some(commit));
+        }
+
+        // 2. If we've already synced all metadata, commit doesn't exist
+        {
+            let state = self.fetch_state.lock().expect("fetch state mutex poisoned");
+            if state.full_metadata_synced {
+                return Ok(None);
+            }
+            // Check if we've already tried to fetch this commit
+            if state.fetched_commits.contains(hash_str) {
+                return Ok(None);
+            }
+        }
+
+        // 3. If fetch not allowed, return None
+        if !self.allow_fetch {
+            return Ok(None);
+        }
+
+        // 4. For shallow repos, warn and prefer API fallback to avoid huge downloads
+        if self.is_shallow() {
+            self.emit(Notice::ShallowRepoDetected);
+            return Ok(None);
+        }
+
+        // 5. Need remote URL to fetch
+        let Some(remote_url) = &self.remote_url else {
+            return Ok(None);
+        };
+
+        // 6. Check ls-remote before fetching (avoid downloading if ref doesn't exist)
+        if !ls_remote_ref_exists(remote_url, hash_str)? {
+            // Mark as fetched (attempted) so we don't retry
+            self.fetch_state
+                .lock()
+                .expect("fetch state mutex poisoned")
+                .fetched_commits
+                .insert(hash_str.to_string());
+            return Ok(None);
+        }
+
+        // 7. Fetch the specific commit
+        fetch_commit(&self.path, remote_url, hash_str)?;
+
+        // 8. Mark as fetched
+        self.fetch_state
+            .lock()
+            .expect("fetch state mutex poisoned")
+            .fetched_commits
+            .insert(hash_str.to_string());
+
+        // 9. Retry local lookup
+        Ok(self.find_commit_local(hash_str))
+    }
+
+    /// Find a commit by hash locally only (no fetch).
     #[must_use]
-    pub fn find_commit(&self, hash_str: &str) -> Option<CommitInfo> {
+    pub fn find_commit_local(&self, hash_str: &str) -> Option<CommitInfo> {
         self.with_repo(|repo| {
             if let Ok(oid) = Oid::from_str(hash_str)
                 && let Ok(commit) = repo.find_commit(oid)
@@ -115,12 +355,97 @@ impl GitRepo {
         })
     }
 
+    pub fn has_path_at_head(&self, path: &str) -> bool {
+        self.with_repo(|repo| {
+            let Ok(head) = repo.head() else {
+                return false;
+            };
+            let Ok(commit) = head.peel_to_commit() else {
+                return false;
+            };
+            let Ok(tree) = commit.tree() else {
+                return false;
+            };
+            tree.get_path(Path::new(path)).is_ok()
+        })
+    }
+
+    pub fn has_tag_named(&self, name: &str) -> bool {
+        self.get_tags().into_iter().any(|tag| tag.name == name)
+    }
+
+    pub fn find_branch_path_match(&self, segments: &[String]) -> Option<(String, Vec<String>)> {
+        // Collect candidates inside the closure to avoid lifetime issues with References
+        let candidates: Vec<(String, Vec<String>)> = self.with_repo(|repo| {
+            let refs = repo.references().ok()?;
+            let mut candidates = Vec::new();
+
+            for reference in refs.flatten() {
+                let Some(name) = reference.name().and_then(|n| n.strip_prefix("refs/heads/"))
+                else {
+                    continue;
+                };
+                let branch_segments: Vec<&str> = name.split('/').collect();
+                if branch_segments.len() > segments.len() {
+                    continue;
+                }
+                let matches_prefix = branch_segments
+                    .iter()
+                    .zip(segments.iter())
+                    .all(|(branch, segment)| *branch == segment.as_str());
+                if matches_prefix {
+                    let remainder: Vec<String> = segments[branch_segments.len()..].to_vec();
+                    candidates.push((name.to_string(), remainder));
+                }
+            }
+            Some(candidates)
+        })?;
+
+        // Filter candidates by checking path existence outside the closure
+        let valid: Vec<_> = candidates
+            .into_iter()
+            .filter(|(branch, remainder)| self.branch_path_exists(branch, remainder))
+            .collect();
+
+        if valid.len() == 1 {
+            return Some(valid.into_iter().next().unwrap());
+        }
+
+        None
+    }
+
+    fn branch_path_exists(&self, branch: &str, segments: &[String]) -> bool {
+        if segments.is_empty() {
+            return false;
+        }
+
+        let mut path = PathBuf::new();
+        for segment in segments {
+            path.push(segment);
+        }
+
+        self.with_repo(|repo| {
+            let Ok(obj) = repo.revparse_single(branch) else {
+                return false;
+            };
+            let Ok(commit) = obj.peel_to_commit() else {
+                return false;
+            };
+            let Ok(tree) = commit.tree() else {
+                return false;
+            };
+            tree.get_path(&path).is_ok()
+        })
+    }
+
     /// Find a file in the repository
     #[must_use]
-    pub fn find_file(&self, path: &str) -> Option<FileInfo> {
+    pub fn find_file_on_branch(&self, branch: &str, path: &str) -> Option<FileInfo> {
         self.with_repo(|repo| {
+            let obj = repo.revparse_single(branch).ok()?;
+            let commit = obj.peel_to_commit().ok()?;
             let mut revwalk = repo.revwalk().ok()?;
-            revwalk.push_head().ok()?;
+            revwalk.push(commit.id()).ok()?;
 
             for oid in revwalk {
                 let oid = oid.ok()?;
@@ -128,7 +453,10 @@ impl GitRepo {
 
                 if commit_touches_file(&commit, path) {
                     let commit_info = Self::commit_to_info(&commit);
-                    let previous_authors = Self::get_previous_authors(repo, path, &commit, 4);
+                    let previous_authors =
+                        Self::get_previous_authors_from(repo, path, &commit, 4, |revwalk| {
+                            revwalk.push(commit.id())
+                        });
 
                     return Some(FileInfo {
                         path: path.to_string(),
@@ -142,19 +470,19 @@ impl GitRepo {
         })
     }
 
-    /// Get previous authors for a file (excluding the last commit)
-    fn get_previous_authors(
+    fn get_previous_authors_from(
         repo: &Repository,
         path: &str,
         last_commit: &Commit,
         limit: usize,
+        seed_revwalk: impl FnOnce(&mut git2::Revwalk) -> Result<(), git2::Error>,
     ) -> Vec<(String, String, String)> {
         let mut authors = Vec::new();
         let Ok(mut revwalk) = repo.revwalk() else {
             return authors;
         };
 
-        if revwalk.push_head().is_err() {
+        if seed_revwalk(&mut revwalk).is_err() {
             return authors;
         }
 
@@ -171,41 +499,33 @@ impl GitRepo {
                 continue;
             };
 
-            if commit.id() == last_commit.id() {
-                found_last = true;
-                continue;
-            }
-
             if !found_last {
+                if commit.id() == last_commit.id() {
+                    found_last = true;
+                }
                 continue;
             }
 
-            if commit_touches_file(&commit, path) {
-                authors.push((
-                    commit.id().to_string()[..7].to_string(),
-                    commit.author().name().unwrap_or("Unknown").to_string(),
-                    commit.author().email().unwrap_or("").to_string(),
-                ));
+            if !commit_touches_file(&commit, path) {
+                continue;
+            }
+
+            let author = commit.author();
+            let name = author.name().unwrap_or("Unknown").to_string();
+            let email = author.email().unwrap_or("").to_string();
+
+            // Skip duplicates
+            if !authors.iter().any(|(_, n, e)| *n == name && *e == email) {
+                authors.push((commit.id().to_string(), name, email));
             }
         }
 
         authors
     }
 
-    /// Get all tags in the repository
+    /// Get all tags in the repository.
     #[must_use]
     pub fn get_tags(&self) -> Vec<TagInfo> {
-        self.get_tags_with_releases(&[])
-    }
-
-    /// Get all tags in the repository, enriched with GitHub release info
-    #[must_use]
-    pub fn get_tags_with_releases(&self, github_releases: &[ReleaseInfo]) -> Vec<TagInfo> {
-        let release_map: std::collections::HashMap<String, &ReleaseInfo> = github_releases
-            .iter()
-            .map(|r| (r.tag_name.clone(), r))
-            .collect();
-
         self.with_repo(|repo| {
             let mut tags = Vec::new();
 
@@ -214,29 +534,15 @@ impl GitRepo {
                     if let Ok(obj) = repo.revparse_single(tag_name)
                         && let Ok(commit) = obj.peel_to_commit()
                     {
-                        let semver_info = parse_semver(tag_name);
-                        let is_semver = semver_info.is_some();
-
-                        let (is_release, release_name, release_url, published_at) = release_map
-                            .get(tag_name)
-                            .map_or((false, None, None, None), |release| {
-                                (
-                                    true,
-                                    release.name.clone(),
-                                    Some(release.url.clone()),
-                                    release.published_at.clone(),
-                                )
-                            });
-
                         tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: commit.id().to_string(),
-                            is_semver,
-                            semver_info,
-                            is_release,
-                            release_name,
-                            release_url,
-                            published_at,
+                            semver_info: parse_semver(tag_name),
+                            created_at: git_time_to_datetime(commit.time()),
+                            is_release: false,
+                            release_name: None,
+                            release_url: None,
+                            published_at: None,
                         });
                     }
                 }
@@ -247,14 +553,44 @@ impl GitRepo {
     }
 
     /// Expose tags that contain the specified commit.
-    #[must_use]
+    /// If `allow_fetch` is true, ensures tags are fetched first.
     pub fn tags_containing_commit(&self, commit_hash: &str) -> Vec<TagInfo> {
+        // Ensure tags are available (fetches if needed)
+        let _ = self.ensure_tags();
+
         let Ok(commit_oid) = Oid::from_str(commit_hash) else {
             return Vec::new();
         };
 
         self.find_tags_containing_commit(commit_oid)
             .unwrap_or_default()
+    }
+
+    /// Ensure all tags are available (fetches if needed).
+    fn ensure_tags(&self) -> WtgResult<()> {
+        {
+            let state = self.fetch_state.lock().expect("fetch state mutex poisoned");
+            if state.tags_synced || state.full_metadata_synced {
+                return Ok(());
+            }
+        }
+
+        if !self.allow_fetch {
+            return Ok(()); // Don't fetch if not allowed
+        }
+
+        let Some(remote_url) = &self.remote_url else {
+            return Ok(()); // No remote to fetch from
+        };
+
+        fetch_tags(&self.path, remote_url)?;
+
+        self.fetch_state
+            .lock()
+            .expect("fetch state mutex poisoned")
+            .tags_synced = true;
+
+        Ok(())
     }
 
     /// Convert a GitHub release into tag metadata if the tag exists locally.
@@ -268,12 +604,12 @@ impl GitRepo {
             Some(TagInfo {
                 name: release.tag_name.clone(),
                 commit_hash: commit.id().to_string(),
-                is_semver: semver_info.is_some(),
                 semver_info,
                 is_release: true,
                 release_name: release.name.clone(),
                 release_url: Some(release.url.clone()),
-                published_at: release.published_at.clone(),
+                published_at: release.published_at,
+                created_at: git_time_to_datetime(commit.time()),
             })
         })
     }
@@ -325,8 +661,8 @@ impl GitRepo {
                         containing_tags.push(TagInfo {
                             name: tag_name.to_string(),
                             commit_hash: tag_oid.to_string(),
-                            is_semver: semver_info.is_some(),
                             semver_info,
+                            created_at: git_time_to_datetime(commit.time()),
                             is_release: false,
                             release_name: None,
                             release_url: None,
@@ -362,32 +698,32 @@ impl GitRepo {
         })
     }
 
-    /// Get the GitHub remote URL if it exists (checks all remotes)
+    /// Iterate over all remotes in the repository.
+    /// Returns an iterator of `RemoteInfo`.
+    pub fn remotes(&self) -> impl Iterator<Item = RemoteInfo> {
+        self.with_repo(Self::collect_remotes).into_iter()
+    }
+
+    /// Get the GitHub remote info.
+    /// Returns stored `gh_repo_info` if set, otherwise extracts from git remotes
+    /// using the `remotes()` API with priority ordering (upstream > origin > other,
+    /// GitHub remotes first within each kind).
     #[must_use]
-    pub fn github_remote(&self) -> Option<(String, String)> {
-        self.with_repo(|repo| {
-            for remote_name in ["origin", "upstream"] {
-                if let Ok(remote) = repo.find_remote(remote_name)
-                    && let Some(url) = remote.url()
-                    && let Some(github_info) = parse_github_url(url)
-                {
-                    return Some(github_info);
-                }
-            }
+    pub fn github_remote(&self) -> Option<GhRepoInfo> {
+        // Return stored gh_repo_info if explicitly set (e.g., from remote() constructor)
+        if let Some(info) = &self.gh_repo_info {
+            return Some(info.clone());
+        }
 
-            if let Ok(remotes) = repo.remotes() {
-                for remote_name in remotes.iter().flatten() {
-                    if let Ok(remote) = repo.find_remote(remote_name)
-                        && let Some(url) = remote.url()
-                        && let Some(github_info) = parse_github_url(url)
-                    {
-                        return Some(github_info);
-                    }
-                }
-            }
+        // Use remotes() API to find the best GitHub remote
+        let mut remotes: Vec<_> = self.remotes().collect();
+        remotes.sort_by_key(RemoteInfo::priority);
 
-            None
-        })
+        // Find the first GitHub remote and parse its URL
+        remotes
+            .into_iter()
+            .find(|r| r.host == Some(RemoteHost::GitHub))
+            .and_then(|r| parse_github_repo_url(&r.url))
     }
 
     /// Convert a `git2::Commit` to `CommitInfo`
@@ -402,12 +738,20 @@ impl GitRepo {
             short_hash: commit.id().to_string()[..7].to_string(),
             message: (*lines.first().unwrap_or(&"")).to_string(),
             message_lines,
+            commit_url: None,
             author_name: commit.author().name().unwrap_or("Unknown").to_string(),
-            author_email: commit.author().email().unwrap_or("").to_string(),
-            date: format_git_time(&time),
-            timestamp: time.seconds(),
+            author_email: commit.author().email().map(str::to_string),
+            author_login: None,
+            author_url: None,
+            date: Utc.timestamp_opt(time.seconds(), 0).unwrap(),
         }
     }
+}
+
+/// Check if a string looks like a git commit hash (7-40 hex characters).
+pub(crate) fn looks_like_commit_hash(input: &str) -> bool {
+    let trimmed = input.trim();
+    trimmed.len() >= 7 && trimmed.len() <= 40 && trimmed.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 /// Check if a commit touches a specific file
@@ -452,348 +796,262 @@ fn tree_entries_differ(
     }
 }
 
-/// Regex for parsing semantic versions with various formats
-/// Supports:
-/// - Optional prefix: py-, rust-, python-, etc.
-/// - Optional 'v' prefix
-/// - Version: X.Y, X.Y.Z, X.Y.Z.W
-/// - Pre-release: -alpha, -beta.1, -rc.1 (dash style) OR a1, b1, rc1 (Python style)
-/// - Build metadata: +build.123
-static SEMVER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^(?:[a-z]+-)?v?(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:(?:-([a-zA-Z0-9.-]+))|(?:([a-z]+)(\d+)))?(?:\+(.+))?$"
-    )
-    .expect("Invalid semver regex")
-});
-
-/// Parse a semantic version string
-/// Supports:
-/// - 2-part: 1.0
-/// - 3-part: 1.2.3
-/// - 4-part: 1.2.3.4
-/// - Pre-release: 1.0.0-alpha, 1.0.0-rc.1, 1.0.0-beta.1
-/// - Python-style pre-release: 1.2.3a1, 1.2.3b1, 1.2.3rc1
-/// - Build metadata: 1.0.0+build.123
-/// - With or without 'v' prefix (e.g., v1.0.0)
-/// - With custom prefixes (e.g., py-v1.0.0, rust-v1.0.0, python-1.0.0)
-fn parse_semver(tag: &str) -> Option<SemverInfo> {
-    let caps = SEMVER_REGEX.captures(tag)?;
-
-    let major = caps.get(1)?.as_str().parse::<u32>().ok()?;
-    let minor = caps.get(2)?.as_str().parse::<u32>().ok()?;
-    let patch = caps.get(3).and_then(|m| m.as_str().parse::<u32>().ok());
-    let build = caps.get(4).and_then(|m| m.as_str().parse::<u32>().ok());
-
-    // Pre-release can be either:
-    // - Group 5: dash-style (-alpha, -beta.1, -rc.1)
-    // - Groups 6+7: Python-style (a1, b1, rc1)
-    let pre_release = caps.get(5).map_or_else(
-        || {
-            caps.get(6).map(|py_pre| {
-                let py_num = caps
-                    .get(7)
-                    .map_or(String::new(), |m| m.as_str().to_string());
-                format!("{}{}", py_pre.as_str(), py_num)
-            })
-        },
-        |dash_pre| Some(dash_pre.as_str().to_string()),
-    );
-
-    let build_metadata = caps.get(8).map(|m| m.as_str().to_string());
-
-    Some(SemverInfo {
-        major,
-        minor,
-        patch,
-        build,
-        pre_release,
-        build_metadata,
-    })
+/// Convert `git2::Time` to `chrono::DateTime<Utc>`
+#[must_use]
+pub fn git_time_to_datetime(time: git2::Time) -> DateTime<Utc> {
+    Utc.timestamp_opt(time.seconds(), 0).unwrap()
 }
 
-/// Check if a tag name is a semantic version
-#[cfg(test)]
-fn is_semver_tag(tag: &str) -> bool {
-    parse_semver(tag).is_some()
-}
+// ========================================
+// Remote/cache helper functions
+// ========================================
 
-/// Parse a GitHub URL to extract owner and repo
-fn parse_github_url(url: &str) -> Option<(String, String)> {
-    // Handle both HTTPS and SSH URLs
-    // HTTPS: https://github.com/owner/repo.git
-    // SSH: git@github.com:owner/repo.git
+/// Get the cache directory for remote repositories
+fn get_cache_dir() -> WtgResult<PathBuf> {
+    let cache_dir = dirs::cache_dir()
+        .ok_or_else(|| {
+            WtgError::Io(IoError::new(
+                ErrorKind::NotFound,
+                "Could not determine cache directory",
+            ))
+        })?
+        .join("wtg")
+        .join("repos");
 
-    if url.contains("github.com") {
-        let parts: Vec<&str> = if url.starts_with("git@") {
-            url.split(':').collect()
-        } else {
-            url.split("github.com/").collect()
-        };
-
-        if let Some(path) = parts.last() {
-            let path = path.trim_end_matches(".git");
-            let repo_parts: Vec<&str> = path.split('/').collect();
-            if repo_parts.len() >= 2 {
-                return Some((repo_parts[0].to_string(), repo_parts[1].to_string()));
-            }
-        }
+    if !cache_dir.exists() {
+        fs::create_dir_all(&cache_dir)?;
     }
 
-    None
+    Ok(cache_dir)
 }
 
-/// Format git time to a human-readable string
-fn format_git_time(time: &Time) -> String {
-    use chrono::{DateTime, TimeZone, Utc};
+/// Clone a remote repository using subprocess with filter=blob:none, falling back to git2 if needed
+fn clone_remote_repo(
+    owner: &str,
+    repo: &str,
+    target_path: &Path,
+    emit: &dyn Fn(Notice),
+) -> WtgResult<()> {
+    // Create parent directory
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
-    let datetime: DateTime<Utc> = Utc.timestamp_opt(time.seconds(), 0).unwrap();
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    let repo_url = format!("https://github.com/{owner}/{repo}.git");
+
+    emit(Notice::CloningRepo {
+        url: repo_url.clone(),
+    });
+
+    // Try subprocess with --filter=blob:none first (requires Git 2.17+)
+    match clone_with_filter(&repo_url, target_path) {
+        Ok(()) => {
+            emit(Notice::CloneSucceeded { used_filter: true });
+            Ok(())
+        }
+        Err(e) => {
+            emit(Notice::CloneFallbackToBare {
+                error: e.to_string(),
+            });
+            // Fall back to git2 bare clone
+            clone_bare_with_git2(&repo_url, target_path, emit)
+        }
+    }
+}
+
+/// Clone with --filter=blob:none using subprocess
+fn clone_with_filter(repo_url: &str, target_path: &Path) -> WtgResult<()> {
+    let output = Command::new("git")
+        .args([
+            "clone",
+            "--filter=blob:none", // Don't download blobs until needed (Git 2.17+)
+            "--bare",             // Bare repository (no working directory)
+            repo_url,
+            target_path.to_str().ok_or_else(|| {
+                WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path"))
+            })?,
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(WtgError::Io(IoError::other(format!(
+            "Failed to clone with filter: {error}"
+        ))));
+    }
+
+    Ok(())
+}
+
+/// Clone bare repository using git2 (fallback)
+fn clone_bare_with_git2(
+    repo_url: &str,
+    target_path: &Path,
+    emit: &dyn Fn(Notice),
+) -> WtgResult<()> {
+    // Clone without progress output for cleaner UX
+    let callbacks = RemoteCallbacks::new();
+
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+
+    // Build the repository with options
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_options);
+    builder.bare(true); // Bare repository - no working directory, only git metadata
+
+    // Clone the repository as bare
+    // This gets all commits, branches, and tags without checking out files
+    builder.clone(repo_url, target_path)?;
+
+    emit(Notice::CloneSucceeded { used_filter: false });
+
+    Ok(())
+}
+
+/// Update an existing cloned remote repository
+fn update_remote_repo(repo_path: &Path, emit: &dyn Fn(Notice)) -> WtgResult<()> {
+    emit(Notice::UpdatingCache);
+
+    // Try subprocess fetch first (works for both filter and non-filter repos)
+    match fetch_with_subprocess(repo_path) {
+        Ok(()) => {
+            emit(Notice::CacheUpdated);
+            Ok(())
+        }
+        Err(_) => {
+            // Fall back to git2
+            fetch_with_git2(repo_path, emit)
+        }
+    }
+}
+
+/// Fetch updates using subprocess
+fn fetch_with_subprocess(repo_path: &Path) -> WtgResult<()> {
+    let args = build_fetch_args(repo_path)?;
+
+    let output = Command::new("git").args(&args).output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(WtgError::Io(IoError::other(format!(
+            "Failed to fetch: {error}"
+        ))));
+    }
+
+    Ok(())
+}
+
+/// Build the arguments passed to `git fetch` when refreshing cached repos.
+fn build_fetch_args(repo_path: &Path) -> WtgResult<Vec<String>> {
+    let repo_path = repo_path
+        .to_str()
+        .ok_or_else(|| WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path")))?;
+
+    Ok(vec![
+        "-C".to_string(),
+        repo_path.to_string(),
+        "fetch".to_string(),
+        "--all".to_string(),
+        "--tags".to_string(),
+        "--force".to_string(),
+        "--prune".to_string(),
+    ])
+}
+
+/// Fetch updates using git2 (fallback)
+fn fetch_with_git2(repo_path: &Path, emit: &dyn Fn(Notice)) -> WtgResult<()> {
+    let repo = Repository::open(repo_path)?;
+
+    // Find the origin remote
+    let mut remote = repo
+        .find_remote("origin")
+        .or_else(|_| repo.find_remote("upstream"))
+        .map_err(WtgError::Git)?;
+
+    // Fetch without progress output for cleaner UX
+    let callbacks = RemoteCallbacks::new();
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+
+    // Fetch all refs
+    remote.fetch(
+        &["refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"],
+        Some(&mut fetch_options),
+        None,
+    )?;
+
+    emit(Notice::CacheUpdated);
+
+    Ok(())
+}
+
+/// Check if a ref exists on remote without fetching (git ls-remote).
+fn ls_remote_ref_exists(remote_url: &str, ref_spec: &str) -> WtgResult<bool> {
+    let output = Command::new("git")
+        .args(["ls-remote", "--exit-code", remote_url, ref_spec])
+        .stderr(Stdio::null())
+        .stdout(Stdio::null())
+        .status();
+
+    match output {
+        Ok(status) => Ok(status.success()),
+        Err(e) => Err(WtgError::Io(e)),
+    }
+}
+
+/// Fetch a specific commit by hash.
+fn fetch_commit(repo_path: &Path, remote_url: &str, hash: &str) -> WtgResult<()> {
+    let repo_path_str = repo_path
+        .to_str()
+        .ok_or_else(|| WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path")))?;
+
+    let output = Command::new("git")
+        .args(["-C", repo_path_str, "fetch", "--depth=1", remote_url, hash])
+        .output()?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(WtgError::Io(IoError::other(format!(
+            "Failed to fetch commit {hash}: {stderr}"
+        ))))
+    }
+}
+
+/// Fetch all tags from remote.
+fn fetch_tags(repo_path: &Path, remote_url: &str) -> WtgResult<()> {
+    let repo_path_str = repo_path
+        .to_str()
+        .ok_or_else(|| WtgError::Io(IoError::new(ErrorKind::InvalidInput, "Invalid path")))?;
+
+    let output = Command::new("git")
+        .args([
+            "-C",
+            repo_path_str,
+            "fetch",
+            "--tags",
+            "--force",
+            remote_url,
+        ])
+        .output()?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(WtgError::Io(IoError::other(format!(
+            "Failed to fetch tags: {stderr}"
+        ))))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_parse_semver_2_part() {
-        let result = parse_semver("1.0");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, None);
-        assert_eq!(semver.build, None);
-    }
-
-    #[test]
-    fn test_parse_semver_2_part_with_v_prefix() {
-        let result = parse_semver("v2.1");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 2);
-        assert_eq!(semver.minor, 1);
-    }
-
-    #[test]
-    fn test_parse_semver_3_part() {
-        let result = parse_semver("1.2.3");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 2);
-        assert_eq!(semver.patch, Some(3));
-        assert_eq!(semver.build, None);
-    }
-
-    #[test]
-    fn test_parse_semver_3_part_with_v_prefix() {
-        let result = parse_semver("v1.2.3");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 2);
-        assert_eq!(semver.patch, Some(3));
-    }
-
-    #[test]
-    fn test_parse_semver_4_part() {
-        let result = parse_semver("1.2.3.4");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 2);
-        assert_eq!(semver.patch, Some(3));
-        assert_eq!(semver.build, Some(4));
-    }
-
-    #[test]
-    fn test_parse_semver_with_pre_release() {
-        let result = parse_semver("1.0.0-alpha");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("alpha".to_string()));
-    }
-
-    #[test]
-    fn test_parse_semver_with_pre_release_numeric() {
-        let result = parse_semver("v2.0.0-rc.1");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 2);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("rc.1".to_string()));
-    }
-
-    #[test]
-    fn test_parse_semver_with_build_metadata() {
-        let result = parse_semver("1.0.0+build.123");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.build_metadata, Some("build.123".to_string()));
-    }
-
-    #[test]
-    fn test_parse_semver_with_pre_release_and_build() {
-        let result = parse_semver("v1.0.0-beta.2+20130313144700");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("beta.2".to_string()));
-        assert_eq!(semver.build_metadata, Some("20130313144700".to_string()));
-    }
-
-    #[test]
-    fn test_parse_semver_2_part_with_pre_release() {
-        let result = parse_semver("2.0-alpha");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 2);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, None);
-        assert_eq!(semver.pre_release, Some("alpha".to_string()));
-    }
-
-    #[test]
-    fn test_parse_semver_invalid_single_part() {
-        assert!(parse_semver("1").is_none());
-    }
-
-    #[test]
-    fn test_parse_semver_invalid_non_numeric() {
-        assert!(parse_semver("abc.def").is_none());
-        assert!(parse_semver("1.x.3").is_none());
-    }
-
-    #[test]
-    fn test_parse_semver_invalid_too_many_parts() {
-        assert!(parse_semver("1.2.3.4.5").is_none());
-    }
-
-    #[test]
-    fn test_is_semver_tag() {
-        // Basic versions
-        assert!(is_semver_tag("1.0"));
-        assert!(is_semver_tag("v1.0"));
-        assert!(is_semver_tag("1.2.3"));
-        assert!(is_semver_tag("v1.2.3"));
-        assert!(is_semver_tag("1.2.3.4"));
-
-        // Pre-release versions
-        assert!(is_semver_tag("1.0.0-alpha"));
-        assert!(is_semver_tag("v2.0.0-rc.1"));
-        assert!(is_semver_tag("1.2.3-beta.2"));
-
-        // Python-style pre-release
-        assert!(is_semver_tag("1.2.3a1"));
-        assert!(is_semver_tag("1.2.3b1"));
-        assert!(is_semver_tag("1.2.3rc1"));
-
-        // Build metadata
-        assert!(is_semver_tag("1.0.0+build"));
-
-        // Custom prefixes
-        assert!(is_semver_tag("py-v1.0.0"));
-        assert!(is_semver_tag("rust-v1.2.3-beta.1"));
-        assert!(is_semver_tag("python-1.2.3b1"));
-
-        // Invalid
-        assert!(!is_semver_tag("v1"));
-        assert!(!is_semver_tag("abc"));
-        assert!(!is_semver_tag("1.2.3.4.5"));
-        assert!(!is_semver_tag("server-v-1.0.0")); // Double dash should fail
-    }
-
-    #[test]
-    fn test_parse_semver_with_custom_prefix() {
-        // Test py-v prefix
-        let result = parse_semver("py-v1.0.0-beta.1");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("beta.1".to_string()));
-
-        // Test rust-v prefix
-        let result = parse_semver("rust-v1.0.0-beta.2");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("beta.2".to_string()));
-
-        // Test prefix without v
-        let result = parse_semver("python-2.1.0");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 2);
-        assert_eq!(semver.minor, 1);
-        assert_eq!(semver.patch, Some(0));
-    }
-
-    #[test]
-    fn test_parse_semver_python_style() {
-        // Alpha
-        let result = parse_semver("1.2.3a1");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 2);
-        assert_eq!(semver.patch, Some(3));
-        assert_eq!(semver.pre_release, Some("a1".to_string()));
-
-        // Beta
-        let result = parse_semver("v1.2.3b2");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 2);
-        assert_eq!(semver.patch, Some(3));
-        assert_eq!(semver.pre_release, Some("b2".to_string()));
-
-        // Release candidate
-        let result = parse_semver("2.0.0rc1");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 2);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("rc1".to_string()));
-
-        // With prefix
-        let result = parse_semver("py-v1.0.0b1");
-        assert!(result.is_some());
-        let semver = result.unwrap();
-        assert_eq!(semver.major, 1);
-        assert_eq!(semver.minor, 0);
-        assert_eq!(semver.patch, Some(0));
-        assert_eq!(semver.pre_release, Some("b1".to_string()));
-    }
-
-    #[test]
-    fn test_parse_semver_rejects_garbage() {
-        // Should reject random strings with -v in them
-        assert!(parse_semver("server-v-config").is_none());
-        assert!(parse_semver("whatever-v-something").is_none());
-
-        // Should reject malformed versions
-        assert!(parse_semver("v1").is_none());
-        assert!(parse_semver("1").is_none());
-        assert!(parse_semver("1.2.3.4.5").is_none());
-        assert!(parse_semver("abc.def").is_none());
-    }
+    use super::*;
 
     #[test]
     fn file_history_tracks_content_and_metadata_changes() {
@@ -835,21 +1093,27 @@ mod tests {
 
         let git_repo = GitRepo::from_path(temp.path()).expect("git repo wrapper");
 
-        let renamed_info = git_repo.find_file(RENAMED_PATH).expect("renamed file info");
+        let renamed_info = git_repo
+            .find_file_on_branch("HEAD", RENAMED_PATH)
+            .expect("renamed file info");
         assert_eq!(
             renamed_info.last_commit.hash,
             post_rename_commit.to_string()
         );
 
         let original_info = git_repo
-            .find_file(ORIGINAL_PATH)
+            .find_file_on_branch("HEAD", ORIGINAL_PATH)
             .expect("original file info");
         assert_eq!(original_info.last_commit.hash, rename_commit.to_string());
 
-        let exec_info = git_repo.find_file(EXECUTABLE_PATH).expect("exec file info");
+        let exec_info = git_repo
+            .find_file_on_branch("HEAD", EXECUTABLE_PATH)
+            .expect("exec file info");
         assert_eq!(exec_info.last_commit.hash, exec_mode_commit.to_string());
 
-        let deleted_info = git_repo.find_file(DELETED_PATH).expect("deleted file info");
+        let deleted_info = git_repo
+            .find_file_on_branch("HEAD", DELETED_PATH)
+            .expect("deleted file info");
         assert_eq!(deleted_info.last_commit.hash, delete_commit.to_string());
     }
 

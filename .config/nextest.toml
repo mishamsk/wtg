@@ -1,3 +1,8 @@
 [profile.ci]
 # Do not cancel the test run on the first failure.
 fail-fast = false
+
+# Retry integration tests which can be flaky due to network/API calls.
+[[profile.ci.overrides]]
+filter = 'test(/^integration_/)'
+retries = { backoff = "exponential", count = 3, delay = "1s", jitter = true, max-delay = "5s" }

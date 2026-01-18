@@ -1,30 +1,38 @@
+use std::{env, ffi::OsString};
+
 use clap::Parser;
 
+use std::sync::Arc;
+
+use crate::backend::resolve_backend_with_notices;
+use crate::cli::Cli;
+use crate::error::{WtgError, WtgResult};
+use crate::resolution::resolve;
+
+pub mod backend;
 pub mod cli;
 pub mod constants;
 pub mod error;
 pub mod git;
 pub mod github;
 pub mod help;
-pub mod identifier;
+pub mod notice;
 pub mod output;
+pub mod parse_input;
 pub mod remote;
-pub mod repo_manager;
-
-use cli::Cli;
-use error::{Result, WtgError};
-use repo_manager::RepoManager;
+pub mod resolution;
+pub mod semver;
 
 /// Run the CLI using the process arguments.
-pub fn run() -> Result<()> {
-    run_with_args(std::env::args())
+pub fn run() -> WtgResult<()> {
+    run_with_args(env::args())
 }
 
 /// Run the CLI using a custom iterator of arguments.
-pub fn run_with_args<I, T>(args: I) -> Result<()>
+pub fn run_with_args<I, T>(args: I) -> WtgResult<()>
 where
     I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
+    T: Into<OsString> + Clone,
 {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
@@ -44,7 +52,7 @@ where
     run_with_cli(cli)
 }
 
-fn run_with_cli(cli: Cli) -> Result<()> {
+fn run_with_cli(cli: Cli) -> WtgResult<()> {
     // If no input provided, show custom help
     if cli.input.is_none() {
         help::display_help();
@@ -58,39 +66,20 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     runtime.block_on(run_async(cli))
 }
 
-async fn run_async(cli: Cli) -> Result<()> {
+async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
-    let parsed_input = cli.parse_input().ok_or_else(|| WtgError::Cli {
-        message: "Invalid input".to_string(),
-        code: 1,
-    })?;
+    let parsed_input = cli.parse_input()?;
 
-    // Create the appropriate repo manager
-    let repo_manager = if let Some(owner) = &parsed_input.owner {
-        let repo = parsed_input.repo.as_ref().ok_or_else(|| WtgError::Cli {
-            message: "Invalid repository".to_string(),
-            code: 1,
-        })?;
-        RepoManager::remote(owner.clone(), repo.clone())?
-    } else {
-        RepoManager::local()?
-    };
+    // Create notice callback - all notices (capability warnings and operational info)
+    // are delivered via callback and printed by output::print_notice
+    let notice_cb = Arc::new(output::print_notice);
 
-    // Get the git repo instance
-    let git_repo = repo_manager.git_repo()?;
+    // Create the backend based on available resources
+    let backend = resolve_backend_with_notices(&parsed_input, cli.fetch, notice_cb)?;
 
-    // Determine the remote info - either from the remote repo manager or from the local repo
-    let remote_info = repo_manager
-        .remote_info()
-        .map_or_else(|| git_repo.github_remote(), Some);
-
-    // Print snarky messages if no GitHub remote (only for local repos)
-    if !repo_manager.is_remote() {
-        remote::check_remote_and_snark(remote_info.clone(), git_repo.path());
-    }
-
-    // Detect what type of input we have
-    let result = Box::pin(identifier::identify(&parsed_input.query, git_repo)).await?;
+    // Resolve the query using the backend
+    let query = backend.disambiguate_query(parsed_input.query()).await?;
+    let result = resolve(backend.as_ref(), &query).await?;
 
     // Display the result
     output::display(result)?;
