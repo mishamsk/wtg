@@ -254,16 +254,33 @@ impl GitRepo {
         f(&repo)
     }
 
-    /// Extract remote URL from repository (origin or upstream)
+    /// Collect all remotes from a repository as `RemoteInfo` structs.
+    fn collect_remotes(repo: &Repository) -> Vec<RemoteInfo> {
+        let remote_names: Vec<String> = repo
+            .remotes()
+            .map(|names| names.iter().flatten().map(str::to_string).collect())
+            .unwrap_or_default();
+
+        remote_names
+            .into_iter()
+            .filter_map(|name| {
+                let remote = repo.find_remote(&name).ok()?;
+                let url = remote.url()?.to_string();
+                Some(RemoteInfo {
+                    name: name.clone(),
+                    kind: RemoteKind::from_name(&name),
+                    host: RemoteHost::from_url(&url),
+                    url,
+                })
+            })
+            .collect()
+    }
+
+    /// Extract remote URL from repository, preferring upstream over origin.
     fn extract_remote_url(repo: &Repository) -> Option<String> {
-        for remote_name in ["origin", "upstream"] {
-            if let Ok(remote) = repo.find_remote(remote_name)
-                && let Some(url) = remote.url()
-            {
-                return Some(url.to_string());
-            }
-        }
-        None
+        let mut remotes = Self::collect_remotes(repo);
+        remotes.sort_by_key(RemoteInfo::priority);
+        remotes.into_iter().next().map(|r| r.url)
     }
 
     /// Find a commit by hash (can be short or full).
@@ -717,26 +734,8 @@ impl GitRepo {
 
     /// Iterate over all remotes in the repository.
     /// Returns an iterator of `RemoteInfo`.
-    pub fn remotes(&self) -> impl Iterator<Item = RemoteInfo> + '_ {
-        // Get remote names upfront (git2 requires this due to mutex)
-        let remote_names: Vec<String> = self.with_repo(|repo| {
-            repo.remotes()
-                .map(|names| names.iter().flatten().map(str::to_string).collect())
-                .unwrap_or_default()
-        });
-
-        remote_names.into_iter().filter_map(move |name| {
-            self.with_repo(|repo| {
-                let remote = repo.find_remote(&name).ok()?;
-                let url = remote.url()?.to_string();
-                Some(RemoteInfo {
-                    name: name.clone(),
-                    kind: RemoteKind::from_name(&name),
-                    host: RemoteHost::from_url(&url),
-                    url,
-                })
-            })
-        })
+    pub fn remotes(&self) -> impl Iterator<Item = RemoteInfo> {
+        self.with_repo(Self::collect_remotes).into_iter()
     }
 
     /// Get the GitHub remote info.
