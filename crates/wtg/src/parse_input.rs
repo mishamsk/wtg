@@ -126,10 +126,13 @@ fn parse_query(input: &str) -> ParsedQuery {
     ParsedQuery::Unknown(input.to_string())
 }
 
-pub(crate) fn try_parse_input(
-    raw_input: &str,
-    repo_url: Option<&str>,
-) -> Result<ParsedInput, WtgError> {
+/// Parse user input into a structured query, optionally with an explicit repo URL.
+///
+/// This is the main entry point for parsing CLI input. It handles:
+/// - GitHub URLs (issues, PRs, commits, files)
+/// - Local queries (commit hashes, tags, file paths)
+/// - Explicit repo + query combinations via the `-r` flag
+pub fn try_parse_input(raw_input: &str, repo_url: Option<&str>) -> Result<ParsedInput, WtgError> {
     // Trim and validate input upfront
     let input = raw_input.trim();
     if input.is_empty() {
