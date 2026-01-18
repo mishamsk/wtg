@@ -14,7 +14,7 @@ use regex::Regex;
 use crate::error::{WtgError, WtgResult};
 use crate::github::{GhRepoInfo, ReleaseInfo};
 use crate::parse_input::parse_github_repo_url;
-use crate::remote::{RemoteHost, RemoteInfo};
+use crate::remote::{RemoteHost, RemoteInfo, RemoteKind};
 
 /// Tracks what data has been synchronized from remote.
 ///
@@ -186,18 +186,6 @@ impl GitRepo {
         })
     }
 
-    /// Extract remote URL from repository (origin or upstream)
-    fn extract_remote_url(repo: &Repository) -> Option<String> {
-        for remote_name in ["origin", "upstream"] {
-            if let Ok(remote) = repo.find_remote(remote_name)
-                && let Some(url) = remote.url()
-            {
-                return Some(url.to_string());
-            }
-        }
-        None
-    }
-
     /// Get the repository path
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -230,6 +218,18 @@ impl GitRepo {
     fn with_repo<T>(&self, f: impl FnOnce(&Repository) -> T) -> T {
         let repo = self.repo.lock().expect("git repository mutex poisoned");
         f(&repo)
+    }
+
+    /// Extract remote URL from repository (origin or upstream)
+    fn extract_remote_url(repo: &Repository) -> Option<String> {
+        for remote_name in ["origin", "upstream"] {
+            if let Ok(remote) = repo.find_remote(remote_name)
+                && let Some(url) = remote.url()
+            {
+                return Some(url.to_string());
+            }
+        }
+        None
     }
 
     /// Find a commit by hash (can be short or full).
@@ -297,7 +297,7 @@ impl GitRepo {
 
     /// Find a commit by hash locally only (no fetch).
     #[must_use]
-    fn find_commit_local(&self, hash_str: &str) -> Option<CommitInfo> {
+    pub fn find_commit_local(&self, hash_str: &str) -> Option<CommitInfo> {
         self.with_repo(|repo| {
             if let Ok(oid) = Oid::from_str(hash_str)
                 && let Ok(commit) = repo.find_commit(oid)
@@ -316,12 +316,97 @@ impl GitRepo {
         })
     }
 
+    pub fn has_path_at_head(&self, path: &str) -> bool {
+        self.with_repo(|repo| {
+            let Ok(head) = repo.head() else {
+                return false;
+            };
+            let Ok(commit) = head.peel_to_commit() else {
+                return false;
+            };
+            let Ok(tree) = commit.tree() else {
+                return false;
+            };
+            tree.get_path(Path::new(path)).is_ok()
+        })
+    }
+
+    pub fn has_tag_named(&self, name: &str) -> bool {
+        self.get_tags().into_iter().any(|tag| tag.name == name)
+    }
+
+    pub fn find_branch_path_match(&self, segments: &[String]) -> Option<(String, Vec<String>)> {
+        // Collect candidates inside the closure to avoid lifetime issues with References
+        let candidates: Vec<(String, Vec<String>)> = self.with_repo(|repo| {
+            let refs = repo.references().ok()?;
+            let mut candidates = Vec::new();
+
+            for reference in refs.flatten() {
+                let Some(name) = reference.name().and_then(|n| n.strip_prefix("refs/heads/"))
+                else {
+                    continue;
+                };
+                let branch_segments: Vec<&str> = name.split('/').collect();
+                if branch_segments.len() > segments.len() {
+                    continue;
+                }
+                let matches_prefix = branch_segments
+                    .iter()
+                    .zip(segments.iter())
+                    .all(|(branch, segment)| *branch == segment.as_str());
+                if matches_prefix {
+                    let remainder: Vec<String> = segments[branch_segments.len()..].to_vec();
+                    candidates.push((name.to_string(), remainder));
+                }
+            }
+            Some(candidates)
+        })?;
+
+        // Filter candidates by checking path existence outside the closure
+        let valid: Vec<_> = candidates
+            .into_iter()
+            .filter(|(branch, remainder)| self.branch_path_exists(branch, remainder))
+            .collect();
+
+        if valid.len() == 1 {
+            return Some(valid.into_iter().next().unwrap());
+        }
+
+        None
+    }
+
+    fn branch_path_exists(&self, branch: &str, segments: &[String]) -> bool {
+        if segments.is_empty() {
+            return false;
+        }
+
+        let mut path = PathBuf::new();
+        for segment in segments {
+            path.push(segment);
+        }
+
+        self.with_repo(|repo| {
+            let Ok(obj) = repo.revparse_single(branch) else {
+                return false;
+            };
+            let Ok(commit) = obj.peel_to_commit() else {
+                return false;
+            };
+            let Ok(tree) = commit.tree() else {
+                return false;
+            };
+            tree.get_path(&path).is_ok()
+        })
+    }
+
     /// Find a file in the repository
     #[must_use]
-    pub fn find_file(&self, path: &str) -> Option<FileInfo> {
+    pub fn find_file_on_branch(&self, branch: &str, path: &str) -> Option<FileInfo> {
         self.with_repo(|repo| {
+            let obj = repo.revparse_single(branch).ok()?;
+            let commit = obj.peel_to_commit().ok()?;
             let mut revwalk = repo.revwalk().ok()?;
-            revwalk.push_head().ok()?;
+            revwalk.push(commit.id()).ok()?;
 
             for oid in revwalk {
                 let oid = oid.ok()?;
@@ -329,7 +414,10 @@ impl GitRepo {
 
                 if commit_touches_file(&commit, path) {
                     let commit_info = Self::commit_to_info(&commit);
-                    let previous_authors = Self::get_previous_authors(repo, path, &commit, 4);
+                    let previous_authors =
+                        Self::get_previous_authors_from(repo, path, &commit, 4, |revwalk| {
+                            revwalk.push(commit.id())
+                        });
 
                     return Some(FileInfo {
                         path: path.to_string(),
@@ -343,19 +431,19 @@ impl GitRepo {
         })
     }
 
-    /// Get previous authors for a file (excluding the last commit)
-    fn get_previous_authors(
+    fn get_previous_authors_from(
         repo: &Repository,
         path: &str,
         last_commit: &Commit,
         limit: usize,
+        seed_revwalk: impl FnOnce(&mut git2::Revwalk) -> Result<(), git2::Error>,
     ) -> Vec<(String, String, String)> {
         let mut authors = Vec::new();
         let Ok(mut revwalk) = repo.revwalk() else {
             return authors;
         };
 
-        if revwalk.push_head().is_err() {
+        if seed_revwalk(&mut revwalk).is_err() {
             return authors;
         }
 
@@ -372,21 +460,24 @@ impl GitRepo {
                 continue;
             };
 
-            if commit.id() == last_commit.id() {
-                found_last = true;
-                continue;
-            }
-
             if !found_last {
+                if commit.id() == last_commit.id() {
+                    found_last = true;
+                }
                 continue;
             }
 
-            if commit_touches_file(&commit, path) {
-                authors.push((
-                    commit.id().to_string()[..7].to_string(),
-                    commit.author().name().unwrap_or("Unknown").to_string(),
-                    commit.author().email().unwrap_or("").to_string(),
-                ));
+            if !commit_touches_file(&commit, path) {
+                continue;
+            }
+
+            let author = commit.author();
+            let name = author.name().unwrap_or("Unknown").to_string();
+            let email = author.email().unwrap_or("").to_string();
+
+            // Skip duplicates
+            if !authors.iter().any(|(_, n, e)| *n == name && *e == email) {
+                authors.push((commit.id().to_string(), name, email));
             }
         }
 
@@ -595,8 +686,6 @@ impl GitRepo {
     /// Iterate over all remotes in the repository.
     /// Returns an iterator of `RemoteInfo`.
     pub fn remotes(&self) -> impl Iterator<Item = RemoteInfo> + '_ {
-        use crate::remote::{RemoteHost, RemoteInfo, RemoteKind};
-
         // Get remote names upfront (git2 requires this due to mutex)
         let remote_names: Vec<String> = self.with_repo(|repo| {
             repo.remotes()
@@ -660,6 +749,12 @@ impl GitRepo {
             date: Utc.timestamp_opt(time.seconds(), 0).unwrap(),
         }
     }
+}
+
+/// Check if a string looks like a git commit hash (7-40 hex characters).
+pub(crate) fn looks_like_commit_hash(input: &str) -> bool {
+    let trimmed = input.trim();
+    trimmed.len() >= 7 && trimmed.len() <= 40 && trimmed.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 /// Check if a commit touches a specific file
@@ -1291,21 +1386,27 @@ mod tests {
 
         let git_repo = GitRepo::from_path(temp.path()).expect("git repo wrapper");
 
-        let renamed_info = git_repo.find_file(RENAMED_PATH).expect("renamed file info");
+        let renamed_info = git_repo
+            .find_file_on_branch("HEAD", RENAMED_PATH)
+            .expect("renamed file info");
         assert_eq!(
             renamed_info.last_commit.hash,
             post_rename_commit.to_string()
         );
 
         let original_info = git_repo
-            .find_file(ORIGINAL_PATH)
+            .find_file_on_branch("HEAD", ORIGINAL_PATH)
             .expect("original file info");
         assert_eq!(original_info.last_commit.hash, rename_commit.to_string());
 
-        let exec_info = git_repo.find_file(EXECUTABLE_PATH).expect("exec file info");
+        let exec_info = git_repo
+            .find_file_on_branch("HEAD", EXECUTABLE_PATH)
+            .expect("exec file info");
         assert_eq!(exec_info.last_commit.hash, exec_mode_commit.to_string());
 
-        let deleted_info = git_repo.find_file(DELETED_PATH).expect("deleted file info");
+        let deleted_info = git_repo
+            .find_file_on_branch("HEAD", DELETED_PATH)
+            .expect("deleted file info");
         assert_eq!(deleted_info.last_commit.hash, delete_commit.to_string());
     }
 

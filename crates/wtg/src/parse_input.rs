@@ -19,20 +19,27 @@ pub enum Query {
     /// A GitHub pull request number
     Pr(u64),
     /// A file path within the repository
-    FilePath(PathBuf),
-    /// Unknown query type
+    FilePath { branch: String, path: PathBuf },
+    /// A git tag name
+    Tag(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedQuery {
+    Resolved(Query),
     Unknown(String),
+    UnknownPath { segments: Vec<String> },
 }
 
 /// Parsed input that can come from either the input argument or a GitHub URL
 #[derive(Debug, Clone)]
 pub struct ParsedInput {
     gh_repo_info: Option<GhRepoInfo>,
-    query: Query,
+    query: ParsedQuery,
 }
 
 impl ParsedInput {
-    const fn new_with_remote(gh_repo_info: GhRepoInfo, query: Query) -> Self {
+    const fn new_with_remote(gh_repo_info: GhRepoInfo, query: ParsedQuery) -> Self {
         Self {
             gh_repo_info: Some(gh_repo_info),
             query,
@@ -41,7 +48,7 @@ impl ParsedInput {
 
     /// Create a `ParsedInput` for a local query (no remote repo info).
     #[must_use]
-    pub const fn new_local_query(query: Query) -> Self {
+    pub const fn new_local_query(query: ParsedQuery) -> Self {
         Self {
             gh_repo_info: None,
             query,
@@ -54,7 +61,7 @@ impl ParsedInput {
     }
 
     #[must_use]
-    pub const fn query(&self) -> &Query {
+    pub const fn query(&self) -> &ParsedQuery {
         &self.query
     }
 
@@ -103,20 +110,20 @@ fn try_parse_input_from_github_url(url: &str) -> Result<ParsedInput, WtgError> {
     }
 }
 
-/// Parse a pre-validated input string into a Query
+/// Parse a pre-validated input string into a `ParsedQuery`
 /// Assumes input is already trimmed, non-empty, and has no control characters
-fn parse_query(input: &str) -> Query {
+fn parse_query(input: &str) -> ParsedQuery {
     // If it starts with a '#', try to parse as issue or PR number
     if let Some(stripped) = input.strip_prefix('#')
         && let Ok(number) = stripped.parse()
     {
-        return Query::IssueOrPr(number);
+        return ParsedQuery::Resolved(Query::IssueOrPr(number));
     }
 
     // Otherwise we have to treat as unknown, since path & branches
     // may look the same, and other git refs may be indistinguishable
     // from commit hashes without querying the repo
-    Query::Unknown(input.to_string())
+    ParsedQuery::Unknown(input.to_string())
 }
 
 pub(crate) fn try_parse_input(
@@ -278,6 +285,56 @@ fn collect_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_github_blob_path(segments: &[String], url: &str) -> WtgResult<ParsedQuery> {
+    if segments.len() < 3 {
+        return Err(WtgError::MalformedGitHubUrl(format!(
+            "Missing file path in URL: {url}"
+        )));
+    }
+
+    let tail = &segments[1..];
+    let path_segments = &tail[1..];
+
+    // If only two segments after blob/tree, first must be the branch name
+    // and second a file in root
+    if tail.len() == 2 {
+        let branch = segments[1].clone();
+        let mut path = PathBuf::new();
+        let file = path_segments.first().ok_or_else(|| {
+            WtgError::MalformedGitHubUrl(format!("Missing file path in URL: {url}"))
+        })?;
+        reject_control_chars(file).map_err(|_| {
+            WtgError::MalformedGitHubUrl(format!("Invalid characters in URL: {url}"))
+        })?;
+        path.push(file);
+        check_path(&path).map_err(|_| {
+            WtgError::MalformedGitHubUrl(format!("Invalid file path in URL: {url}"))
+        })?;
+        return Ok(ParsedQuery::Resolved(Query::FilePath { branch, path }));
+    }
+
+    let mut sanitized = Vec::with_capacity(tail.len());
+    for seg in tail {
+        reject_control_chars(seg).map_err(|_| {
+            WtgError::MalformedGitHubUrl(format!("Invalid characters in URL: {url}"))
+        })?;
+        sanitized.push(seg.clone());
+    }
+
+    check_path(&PathBuf::from_iter(&sanitized))
+        .map_err(|_| WtgError::MalformedGitHubUrl(format!("Invalid file path in URL: {url}")))?;
+
+    if sanitized.is_empty() {
+        return Err(WtgError::MalformedGitHubUrl(format!(
+            "Missing file path in URL: {url}"
+        )));
+    }
+
+    Ok(ParsedQuery::UnknownPath {
+        segments: sanitized,
+    })
+}
+
 fn owner_repo_from_segments(segments: &[String], is_api: bool) -> Option<GhRepoInfo> {
     split_url_segments(segments, is_api).map(|(repo_info, _)| repo_info)
 }
@@ -323,7 +380,7 @@ fn parsed_input_from_segments(
             reject_control_chars(hash).map_err(|_| {
                 WtgError::MalformedGitHubUrl(format!("Invalid characters in URL: {url}"))
             })?;
-            Query::GitCommit(hash.clone())
+            ParsedQuery::Resolved(Query::GitCommit(hash.clone()))
         }
         "issues" => {
             let num_str = segments.get(1).ok_or_else(|| {
@@ -332,7 +389,7 @@ fn parsed_input_from_segments(
             let num = num_str.parse().map_err(|_| {
                 WtgError::MalformedGitHubUrl(format!("Invalid issue number in URL: {url}"))
             })?;
-            Query::Issue(num)
+            ParsedQuery::Resolved(Query::Issue(num))
         }
         "pull" => {
             let num_str = segments.get(1).ok_or_else(|| {
@@ -341,28 +398,10 @@ fn parsed_input_from_segments(
             let num = num_str.parse().map_err(|_| {
                 WtgError::MalformedGitHubUrl(format!("Invalid PR number in URL: {url}"))
             })?;
-            Query::Pr(num)
+            ParsedQuery::Resolved(Query::Pr(num))
         }
         // File path will start from segment index 2, e.g., /blob/branch/path/to/file
-        "blob" | "tree" if segments.len() >= 2 => {
-            // TODO: this is not correct when branch names contain slashes. Deterministically
-            // resolving branch vs path requires API calls.
-            let mut path = PathBuf::new();
-            for seg in &segments[2..] {
-                // URL segments may contain percent-decoded control chars, validate them
-                reject_control_chars(seg).map_err(|_| {
-                    WtgError::MalformedGitHubUrl(format!("Invalid characters in URL: {url}"))
-                })?;
-                path.push(seg);
-            }
-
-            // Do a security check on the path
-            check_path(&path).map_err(|_| {
-                WtgError::MalformedGitHubUrl(format!("Invalid file path in URL: {url}"))
-            })?;
-
-            Query::FilePath(path)
-        }
+        "blob" | "tree" if segments.len() >= 2 => parse_github_blob_path(segments, url)?,
         _ => {
             return Err(WtgError::MalformedGitHubUrl(format!(
                 "Unrecognized GitHub URL route: {url}"
@@ -415,13 +454,16 @@ pub(crate) fn check_path(path: &Path) -> WtgResult<()> {
         ));
     }
 
-    if path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(WtgError::SecurityRejection(
-            "Some fishy `..` in the path".to_string(),
-        ));
+    if let Some(c) = path.components().find(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(WtgError::SecurityRejection(format!(
+            "Some fishy `{}` in the path",
+            c.as_os_str().to_string_lossy()
+        )));
     }
 
     Ok(())
@@ -456,11 +498,16 @@ mod tests {
     }
 
     impl QueryMatcher {
-        fn assert_matches(&self, actual: &Query) {
+        fn assert_matches(&self, actual: &ParsedQuery) {
             match self {
-                Self::Exact(expected) => assert_eq!(actual, expected),
+                Self::Exact(expected) => {
+                    assert_eq!(actual, &ParsedQuery::Resolved(expected.clone()));
+                }
                 Self::Commit(hash) => {
-                    assert_eq!(actual, &Query::GitCommit(hash.clone()));
+                    assert_eq!(
+                        actual,
+                        &ParsedQuery::Resolved(Query::GitCommit(hash.clone()))
+                    );
                 }
             }
         }
@@ -504,7 +551,7 @@ mod tests {
         let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, expected_query);
+        assert_eq!(parsed.query, ParsedQuery::Resolved(expected_query));
     }
 
     #[rstest]
@@ -548,7 +595,7 @@ mod tests {
         let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, expected_query);
+        assert_eq!(parsed.query, ParsedQuery::Resolved(expected_query));
     }
 
     #[rstest]
@@ -579,7 +626,10 @@ mod tests {
         let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, Query::GitCommit(expected_hash.to_string()));
+        assert_eq!(
+            parsed.query,
+            ParsedQuery::Resolved(Query::GitCommit(expected_hash.to_string()))
+        );
     }
 
     #[rstest]
@@ -587,39 +637,65 @@ mod tests {
         "https://github.com/owner/repo/blob/main/README.md",
         "owner",
         "repo",
+        "main",
         "README.md"
     )]
-    #[case::blob_deep_nesting(
-        "https://github.com/owner/repo/blob/main/a/b/c/d.txt",
+    #[case::tree_directory(
+        "https://github.com/owner/repo/tree/main/src",
         "owner",
         "repo",
-        "a/b/c/d.txt"
-    )]
-    #[case::tree_directory("https://github.com/owner/repo/tree/main/src", "owner", "repo", "src")]
-    // TODO: this is obviously wrong, but deterministically resolving branch vs path requires API calls
-    #[case::tree_nested_branch(
-        "https://github.com/owner/repo/tree/feat/new-feature/docs/api",
-        "owner",
-        "repo",
-        "new-feature/docs/api"
-    )]
-    #[case::percent_encoded_space(
-        "https://github.com/owner/repo/blob/main/path%20with%20spaces/file.txt",
-        "owner",
-        "repo",
-        "path with spaces/file.txt"
+        "main",
+        "src"
     )]
     fn parses_github_file_urls(
         #[case] url: &str,
         #[case] expected_owner: &str,
         #[case] expected_repo: &str,
+        #[case] expected_branch: &str,
         #[case] expected_path: &str,
     ) {
         let parsed = try_parse_input_from_github_url(url)
             .unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, Query::FilePath(PathBuf::from(expected_path)));
+        assert_eq!(
+            parsed.query,
+            ParsedQuery::Resolved(Query::FilePath {
+                branch: expected_branch.to_string(),
+                path: PathBuf::from(expected_path)
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::tree_nested_branch(
+        "https://github.com/owner/repo/tree/feat/new-feature/docs/api",
+        vec!["feat", "new-feature", "docs", "api"]
+    )]
+    #[case::blob_nested_branch(
+        "https://github.com/owner/repo/blob/feat/new-feature/docs/api/readme.md",
+        vec!["feat", "new-feature", "docs", "api", "readme.md"]
+    )]
+    #[case::blob_deep_nesting(
+        "https://github.com/owner/repo/blob/main/a/b/c/d.txt",
+        vec!["main", "a", "b", "c", "d.txt"]
+    )]
+    #[case::percent_encoded_space(
+        "https://github.com/owner/repo/blob/main/path%20with%20spaces/file.txt",
+        vec!["main", "path with spaces", "file.txt"]
+    )]
+    fn parses_github_paths_with_ambiguous_branch(
+        #[case] url: &str,
+        #[case] expected_segments: Vec<&str>,
+    ) {
+        let parsed = try_parse_input_from_github_url(url)
+            .unwrap_or_else(|_| panic!("failed to parse {url}"));
+        assert_eq!(
+            parsed.query,
+            ParsedQuery::UnknownPath {
+                segments: expected_segments.iter().map(|s| (*s).to_string()).collect()
+            }
+        );
     }
 
     #[rstest]
@@ -658,7 +734,7 @@ mod tests {
         let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, expected_query);
+        assert_eq!(parsed.query, ParsedQuery::Resolved(expected_query));
     }
 
     #[rstest]
@@ -704,22 +780,22 @@ mod tests {
         let parsed = try_parse_input(url, None).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, expected_query);
+        assert_eq!(parsed.query, ParsedQuery::Resolved(expected_query));
     }
 
     #[rstest]
-    #[case::hash_with_prefix("#42", Query::IssueOrPr(42))]
-    #[case::hash_without_prefix("42", Query::Unknown("42".to_string()))]
-    #[case::hash_with_whitespace("  #99  ", Query::IssueOrPr(99))]
-    #[case::short_hash("abc123d", Query::Unknown("abc123d".to_string()))]
-    #[case::hash_with_whitespace("  abc123  ", Query::Unknown("abc123".to_string()))]
-    #[case::simple_tag("v1.0.0", Query::Unknown("v1.0.0".to_string()))]
-    #[case::simple_file("README.md", Query::Unknown("README.md".to_string()))]
-    #[case::nested_file("src/lib.rs", Query::Unknown("src/lib.rs".to_string()))]
-    #[case::unicode_path("src/файл.rs", Query::Unknown("src/файл.rs".to_string()))]
-    #[case::unicode_tag("версия-1.0", Query::Unknown("версия-1.0".to_string()))]
-    #[case::emoji_in_path("src/👍.md", Query::Unknown("src/👍.md".to_string()))]
-    fn parses_local_inputs(#[case] input: &str, #[case] expected: Query) {
+    #[case::hash_with_prefix("#42", ParsedQuery::Resolved(Query::IssueOrPr(42)))]
+    #[case::hash_without_prefix("42", ParsedQuery::Unknown("42".to_string()))]
+    #[case::hash_with_whitespace("  #99  ", ParsedQuery::Resolved(Query::IssueOrPr(99)))]
+    #[case::short_hash("abc123d", ParsedQuery::Unknown("abc123d".to_string()))]
+    #[case::hash_with_whitespace("  abc123  ", ParsedQuery::Unknown("abc123".to_string()))]
+    #[case::simple_tag("v1.0.0", ParsedQuery::Unknown("v1.0.0".to_string()))]
+    #[case::simple_file("README.md", ParsedQuery::Unknown("README.md".to_string()))]
+    #[case::nested_file("src/lib.rs", ParsedQuery::Unknown("src/lib.rs".to_string()))]
+    #[case::unicode_path("src/файл.rs", ParsedQuery::Unknown("src/файл.rs".to_string()))]
+    #[case::unicode_tag("версия-1.0", ParsedQuery::Unknown("версия-1.0".to_string()))]
+    #[case::emoji_in_path("src/👍.md", ParsedQuery::Unknown("src/👍.md".to_string()))]
+    fn parses_local_inputs(#[case] input: &str, #[case] expected: ParsedQuery) {
         let parsed = try_parse_input(input, None).expect("Should parse issue/PR number");
         assert_eq!(parsed.query, expected);
         assert!(parsed.gh_repo_info().is_none());
@@ -744,7 +820,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("failed to parse {input}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, Query::Unknown("dummy".to_string()));
+        assert_eq!(parsed.query, ParsedQuery::Unknown("dummy".to_string()));
     }
 
     #[rstest]
@@ -763,7 +839,7 @@ mod tests {
             try_parse_input("dummy", Some(url)).unwrap_or_else(|_| panic!("failed to parse {url}"));
         assert_eq!(parsed.owner(), Some(expected_owner));
         assert_eq!(parsed.repo(), Some(expected_repo));
-        assert_eq!(parsed.query, Query::Unknown("dummy".to_string()));
+        assert_eq!(parsed.query, ParsedQuery::Unknown("dummy".to_string()));
     }
 
     // ========================================================================
@@ -771,15 +847,33 @@ mod tests {
     // ========================================================================
 
     #[rstest]
-    #[case::issue_with_repo("#42", "owner/repo", "owner", "repo", Query::IssueOrPr(42))]
-    #[case::hash_with_repo("abc123", "owner/repo", "owner", "repo", Query::Unknown("abc123".to_string()))]
-    #[case::file_with_repo("src/lib.rs", "https://github.com/owner/repo", "owner", "repo", Query::Unknown("src/lib.rs".to_string()))]
+    #[case::issue_with_repo(
+        "#42",
+        "owner/repo",
+        "owner",
+        "repo",
+        ParsedQuery::Resolved(Query::IssueOrPr(42))
+    )]
+    #[case::hash_with_repo(
+        "abc123",
+        "owner/repo",
+        "owner",
+        "repo",
+        ParsedQuery::Unknown("abc123".to_string())
+    )]
+    #[case::file_with_repo(
+        "src/lib.rs",
+        "https://github.com/owner/repo",
+        "owner",
+        "repo",
+        ParsedQuery::Unknown("src/lib.rs".to_string())
+    )]
     fn parses_input_with_explicit_repo(
         #[case] input: &str,
         #[case] repo_url: &str,
         #[case] expected_owner: &str,
         #[case] expected_repo: &str,
-        #[case] expected_query: Query,
+        #[case] expected_query: ParsedQuery,
     ) {
         let parsed = try_parse_input(input, Some(repo_url))
             .unwrap_or_else(|_| panic!("failed to parse {input} with repo {repo_url}"));

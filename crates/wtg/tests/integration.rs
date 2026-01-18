@@ -6,7 +6,7 @@
 /// - CI: automatically included in the `ci` profile
 use std::path::PathBuf;
 use wtg_cli::backend::resolve_backend;
-use wtg_cli::parse_input::{ParsedInput, Query};
+use wtg_cli::parse_input::{ParsedInput, ParsedQuery, Query};
 use wtg_cli::resolution::IdentifiedThing;
 use wtg_cli::resolution::resolve;
 
@@ -14,9 +14,15 @@ use wtg_cli::resolution::resolve;
 #[tokio::test]
 async fn integration_identify_recent_commit() {
     // Identify a known commit (from git log)
-    let query = Query::GitCommit("6146f62054c1eb14792be673275f8bc9a2e223f3".to_string());
-    let parsed_input = ParsedInput::new_local_query(query.clone());
+    let parsed_input = ParsedInput::new_local_query(ParsedQuery::Resolved(Query::GitCommit(
+        "6146f62054c1eb14792be673275f8bc9a2e223f3".to_string(),
+    )));
     let resolved = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = resolved
+        .backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate commit");
 
     let result = resolve(resolved.backend.as_ref(), &query)
         .await
@@ -32,9 +38,13 @@ async fn integration_identify_tag() {
     const TAG_NAME: &str = "v0.1.0";
 
     // Identify the first tag
-    let query = Query::Unknown(TAG_NAME.to_string());
-    let parsed_input = ParsedInput::new_local_query(query.clone());
+    let parsed_input = ParsedInput::new_local_query(ParsedQuery::Unknown(TAG_NAME.to_string()));
     let resolved = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = resolved
+        .backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate tag");
 
     let result = resolve(resolved.backend.as_ref(), &query)
         .await
@@ -48,9 +58,16 @@ async fn integration_identify_tag() {
 #[tokio::test]
 async fn integration_identify_file() {
     // Identify LICENSE (which should not change)
-    let query = Query::FilePath(PathBuf::from("LICENSE"));
-    let parsed_input = ParsedInput::new_local_query(query.clone());
+    let parsed_input = ParsedInput::new_local_query(ParsedQuery::Resolved(Query::FilePath {
+        branch: "HEAD".to_string(),
+        path: PathBuf::from("LICENSE"),
+    }));
     let resolved = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = resolved
+        .backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate file");
 
     let result = resolve(resolved.backend.as_ref(), &query)
         .await

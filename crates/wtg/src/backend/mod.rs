@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
-use crate::parse_input::ParsedInput;
+use crate::parse_input::{ParsedInput, ParsedQuery, Query};
 use crate::remote::{RemoteHost, RemoteInfo};
 
 /// Unified backend trait for all git/GitHub operations.
@@ -69,7 +69,7 @@ pub trait Backend: Send + Sync {
     // ============================================
 
     /// Find file and its history in the repository.
-    async fn find_file(&self, _path: &str) -> WtgResult<FileInfo> {
+    async fn find_file(&self, _branch: &str, _path: &str) -> WtgResult<FileInfo> {
         Err(WtgError::Unsupported("file lookup".into()))
     }
 
@@ -80,6 +80,15 @@ pub trait Backend: Send + Sync {
     /// Find a specific tag by name.
     async fn find_tag(&self, _name: &str) -> WtgResult<TagInfo> {
         Err(WtgError::Unsupported("tag lookup".into()))
+    }
+
+    /// Disambiguate a parsed query into a concrete query.
+    async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
+        match query {
+            ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),
+            ParsedQuery::Unknown(input) => Err(WtgError::NotFound(input.clone())),
+            ParsedQuery::UnknownPath { segments } => Err(WtgError::NotFound(segments.join("/"))),
+        }
     }
 
     /// Find a release/tag that contains the given commit.

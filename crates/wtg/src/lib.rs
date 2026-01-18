@@ -75,7 +75,11 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     }
 
     // Resolve the query using the backend
-    let result = resolve(resolved.backend.as_ref(), parsed_input.query()).await?;
+    let query = resolved
+        .backend
+        .disambiguate_query(parsed_input.query())
+        .await?;
+    let result = resolve(resolved.backend.as_ref(), &query).await?;
 
     // Display the result
     output::display(result)?;

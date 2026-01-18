@@ -2,9 +2,9 @@ mod common;
 
 use common::{TestRepoFixture, test_repo};
 use rstest::rstest;
-use std::path::PathBuf;
-use wtg_cli::backend::GitBackend;
-use wtg_cli::parse_input::Query;
+use std::path::{Path, PathBuf};
+use wtg_cli::backend::{Backend, GitBackend};
+use wtg_cli::parse_input::{ParsedQuery, Query};
 use wtg_cli::resolution::resolve;
 use wtg_cli::resolution::{EntryPoint, IdentifiedThing};
 
@@ -86,7 +86,10 @@ async fn test_identify_commit_by_short_hash(test_repo: TestRepoFixture) {
 #[tokio::test]
 async fn test_identify_file(test_repo: TestRepoFixture) {
     let backend = GitBackend::new(test_repo.repo);
-    let query = Query::FilePath(PathBuf::from("test.txt"));
+    let query = Query::FilePath {
+        branch: "HEAD".to_string(),
+        path: PathBuf::from("test.txt"),
+    };
 
     let result = resolve(&backend, &query)
         .await
@@ -124,8 +127,10 @@ async fn test_identify_file(test_repo: TestRepoFixture) {
 #[tokio::test]
 async fn test_identify_tag(test_repo: TestRepoFixture) {
     let backend = GitBackend::new(test_repo.repo);
-    // Tags are resolved via Unknown query type
-    let query = Query::Unknown("v1.0.0".to_string());
+    let query = backend
+        .disambiguate_query(&ParsedQuery::Unknown("v1.0.0".to_string()))
+        .await
+        .expect("Failed to disambiguate tag");
 
     let result = resolve(&backend, &query)
         .await
@@ -152,8 +157,77 @@ async fn test_identify_tag(test_repo: TestRepoFixture) {
 #[tokio::test]
 async fn test_identify_nonexistent(test_repo: TestRepoFixture) {
     let backend = GitBackend::new(test_repo.repo);
-    let query = Query::Unknown("nonexistent-thing".to_string());
-
-    let result = resolve(&backend, &query).await;
+    let result = backend
+        .disambiguate_query(&ParsedQuery::Unknown("nonexistent-thing".to_string()))
+        .await;
     assert!(result.is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn disambiguates_branch_paths_with_slashes() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let repo_path = temp_dir.path().to_path_buf();
+
+    // Setup git repo in a block so git2 types are dropped before async calls
+    {
+        let repo = git2::Repository::init(&repo_path).expect("init repo");
+        let signature = git2::Signature::now("Test User", "test@example.com").expect("signature");
+        let initial_file = repo_path.join("root.txt");
+        std::fs::write(&initial_file, "root").expect("write file");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("root.txt")).expect("add path");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .expect("commit");
+
+        let branch_name = "some/path";
+        let target_commit = repo.head().expect("head").peel_to_commit().expect("commit");
+        repo.branch(branch_name, &target_commit, true)
+            .expect("branch");
+
+        let docs_dir = repo_path.join("docs");
+        std::fs::create_dir_all(&docs_dir).expect("create docs dir");
+        std::fs::write(docs_dir.join("guide.md"), "docs").expect("write docs");
+        let mut index = repo.index().expect("index");
+        index
+            .add_path(Path::new("docs/guide.md"))
+            .expect("add docs");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let parent = repo.head().expect("head").peel_to_commit().expect("commit");
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "add docs",
+            &tree,
+            &[&parent],
+        )
+        .expect("commit docs");
+        let updated_commit = repo.head().expect("head").peel_to_commit().expect("commit");
+        repo.branch(branch_name, &updated_commit, true)
+            .expect("branch update");
+    }
+
+    let repo = wtg_cli::git::GitRepo::from_path(&repo_path).expect("open repo");
+    let backend = GitBackend::new(repo);
+    let query = backend
+        .disambiguate_query(&ParsedQuery::UnknownPath {
+            segments: vec![
+                "some".to_string(),
+                "path".to_string(),
+                "docs".to_string(),
+                "guide.md".to_string(),
+            ],
+        })
+        .await
+        .expect("disambiguate path");
+
+    assert!(matches!(
+        query,
+        Query::FilePath { branch, path }
+            if branch == "some/path" && path == Path::new("docs/guide.md")
+    ));
 }

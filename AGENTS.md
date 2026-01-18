@@ -73,6 +73,7 @@ Notes
 - Avoid new dependencies unless they deliver measurable benefit to command output quality or performance.
 - Optimize for fast startup and low noise. Every log line must aid in understanding contributor activity.
 - Maintain deterministic behavior; if external APIs are touched, defend against rate limits and transient failures.
+- Dead code is not allowed. Remove any unused functions, methods, or types immediately. This includes `pub` APIs that become unused (which the Rust compiler does not flag as dead code). Never use `#[allow(dead_code)]` to suppress warnings—delete the code instead.
 
 ## User Experience Requirements
 - CLI responses must remain concise, actionable, and lightly snarky per product positioning, but never at the expense of accuracy.

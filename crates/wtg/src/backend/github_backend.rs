@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use super::Backend;
 use crate::error::{WtgError, WtgResult};
-use crate::git::{CommitInfo, TagInfo};
+use crate::git::{CommitInfo, TagInfo, looks_like_commit_hash};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
+use crate::parse_input::{ParsedQuery, Query};
 
 /// Pure GitHub API backend.
 ///
@@ -145,6 +146,19 @@ impl Backend for GitHubBackend {
     ) -> Option<TagInfo> {
         let since = commit_date.unwrap_or_else(Utc::now);
         self.find_release_for_commit_impl(commit_hash, since).await
+    }
+
+    async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
+        match query {
+            ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),
+            ParsedQuery::Unknown(input) => {
+                if looks_like_commit_hash(input) && self.find_commit(input).await.is_ok() {
+                    return Ok(Query::GitCommit(input.clone()));
+                }
+                Err(WtgError::NotFound(input.clone()))
+            }
+            ParsedQuery::UnknownPath { segments } => Err(WtgError::NotFound(segments.join("/"))),
+        }
     }
 
     // ============================================

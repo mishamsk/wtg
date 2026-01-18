@@ -151,11 +151,12 @@ fn display_identification(entry_point: &EntryPoint) {
                 num.to_string().cyan()
             );
         }
-        EntryPoint::FilePath(path) => {
+        EntryPoint::FilePath { branch, path } => {
             println!(
-                "{} {}",
+                "{} {}@{}",
                 "📄 Found file:".green().bold(),
-                path.as_str().cyan()
+                path.as_str().cyan(),
+                branch.clone().cyan()
             );
         }
         EntryPoint::Tag(tag) => {

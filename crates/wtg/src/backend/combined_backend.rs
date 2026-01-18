@@ -16,6 +16,7 @@ use crate::backend::{Backend, git_backend::GitBackend, github_backend::GitHubBac
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
+use crate::parse_input::{ParsedQuery, Query};
 
 /// Combined backend using both local git and GitHub API.
 ///
@@ -277,9 +278,9 @@ impl Backend for CombinedBackend {
     // File operations - local only
     // ============================================
 
-    async fn find_file(&self, path: &str) -> WtgResult<FileInfo> {
+    async fn find_file(&self, branch: &str, path: &str) -> WtgResult<FileInfo> {
         // Only git has efficient file history
-        self.git.find_file(path).await
+        self.git.find_file(branch, path).await
     }
 
     // ============================================
@@ -296,6 +297,24 @@ impl Backend for CombinedBackend {
         commit_date: Option<DateTime<Utc>>,
     ) -> Option<TagInfo> {
         self.find_release_combined(commit_hash, commit_date).await
+    }
+
+    async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
+        match query {
+            ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),
+            ParsedQuery::Unknown(input) => {
+                // Try git disambiguation first (tag, file, commit)
+                if let Ok(q) = self.git.disambiguate_query(query).await {
+                    return Ok(q);
+                }
+                // Fall back: treat numeric input as issue/PR number
+                if let Ok(number) = input.parse::<u64>() {
+                    return Ok(Query::IssueOrPr(number));
+                }
+                Err(WtgError::NotFound(input.clone()))
+            }
+            ParsedQuery::UnknownPath { .. } => self.git.disambiguate_query(query).await,
+        }
     }
 
     // ============================================

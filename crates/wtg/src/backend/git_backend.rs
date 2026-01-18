@@ -5,11 +5,13 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use super::Backend;
 use crate::error::{WtgError, WtgResult};
-use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
+use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo, looks_like_commit_hash};
 use crate::github::GitHubClient;
+use crate::parse_input::{ParsedQuery, Query};
 
 /// Pure local git backend wrapping a `GitRepo`.
 ///
@@ -87,6 +89,34 @@ impl GitBackend {
                 select_with_pred(candidates, timestamps, |t| !t.is_release && !t.is_semver())
             })
     }
+
+    fn disambiguate_input_string(&self, input: &str) -> WtgResult<Query> {
+        if self.repo.get_tags().iter().any(|tag| tag.name == input) {
+            return Ok(Query::Tag(input.to_string()));
+        }
+
+        if self.repo.has_path_at_head(input) {
+            return Ok(Query::FilePath {
+                branch: "HEAD".to_string(),
+                path: PathBuf::from(input),
+            });
+        }
+
+        if looks_like_commit_hash(input) && self.repo.find_commit_local(input).is_some() {
+            return Ok(Query::GitCommit(input.to_string()));
+        }
+
+        Err(WtgError::NotFound(input.to_string()))
+    }
+
+    fn disambiguate_unknown_path(&self, segments: &[String]) -> Option<Query> {
+        let (branch, remainder) = self.repo.find_branch_path_match(segments)?;
+        let mut path = PathBuf::new();
+        for segment in remainder {
+            path.push(segment);
+        }
+        Some(Query::FilePath { branch, path })
+    }
 }
 
 #[async_trait]
@@ -119,9 +149,9 @@ impl Backend for GitBackend {
     // File operations
     // ============================================
 
-    async fn find_file(&self, path: &str) -> WtgResult<FileInfo> {
+    async fn find_file(&self, branch: &str, path: &str) -> WtgResult<FileInfo> {
         self.repo
-            .find_file(path)
+            .find_file_on_branch(branch, path)
             .ok_or_else(|| WtgError::NotFound(path.to_string()))
     }
 
@@ -135,6 +165,16 @@ impl Backend for GitBackend {
             .into_iter()
             .find(|t| t.name == name)
             .ok_or_else(|| WtgError::NotFound(name.to_string()))
+    }
+
+    async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
+        match query {
+            ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),
+            ParsedQuery::Unknown(input) => self.disambiguate_input_string(input),
+            ParsedQuery::UnknownPath { segments } => self
+                .disambiguate_unknown_path(segments)
+                .ok_or_else(|| WtgError::NotFound(segments.join("/"))),
+        }
     }
 
     async fn find_release_for_commit(

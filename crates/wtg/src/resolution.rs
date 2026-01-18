@@ -17,11 +17,11 @@ use crate::parse_input::Query;
 /// What the user entered to search for
 #[derive(Debug, Clone)]
 pub enum EntryPoint {
-    Commit(String),         // Hash they entered
-    IssueNumber(u64),       // Issue # they entered
-    PullRequestNumber(u64), // PR # they entered
-    FilePath(String),       // File path they entered
-    Tag(String),            // Tag they entered
+    Commit(String),                            // Hash they entered
+    IssueNumber(u64),                          // Issue # they entered
+    PullRequestNumber(u64),                    // PR # they entered
+    FilePath { branch: String, path: String }, // File path they entered
+    Tag(String),                               // Tag they entered
 }
 
 /// Information about an Issue
@@ -104,8 +104,10 @@ pub async fn resolve(backend: &dyn Backend, query: &Query) -> WtgResult<Identifi
             }
             Err(WtgError::NotFound(format!("#{number}")))
         }
-        Query::FilePath(path) => resolve_file(backend, &path.to_string_lossy()).await,
-        Query::Unknown(input) => resolve_unknown(backend, input).await,
+        Query::FilePath { branch, path } => {
+            resolve_file(backend, branch, &path.to_string_lossy()).await
+        }
+        Query::Tag(tag) => resolve_tag(backend, tag).await,
     }
 }
 
@@ -208,8 +210,12 @@ async fn resolve_issue(backend: &dyn Backend, number: u64) -> WtgResult<Identifi
 }
 
 /// Resolve a file path to `IdentifiedThing`.
-async fn resolve_file(backend: &dyn Backend, path: &str) -> WtgResult<IdentifiedThing> {
-    let file_info = backend.find_file(path).await?;
+async fn resolve_file(
+    backend: &dyn Backend,
+    branch: &str,
+    path: &str,
+) -> WtgResult<IdentifiedThing> {
+    let file_info = backend.find_file(branch, path).await?;
     let commit_url = backend.commit_url(&file_info.last_commit.hash);
 
     // Generate author URLs from emails
@@ -239,34 +245,4 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
     let tag = backend.find_tag(name).await?;
     let url = backend.tag_url(name);
     Ok(IdentifiedThing::TagOnly(Box::new(tag), url))
-}
-
-/// Resolve unknown input by trying each possibility.
-async fn resolve_unknown(backend: &dyn Backend, input: &str) -> WtgResult<IdentifiedThing> {
-    // Try as commit hash
-    if let Ok(result) = resolve_commit(backend, input).await {
-        return Ok(result);
-    }
-
-    // Try as PR/issue number (if numeric)
-    if let Ok(number) = input.parse::<u64>() {
-        if let Ok(result) = resolve_pr(backend, number).await {
-            return Ok(result);
-        }
-        if let Ok(result) = resolve_issue(backend, number).await {
-            return Ok(result);
-        }
-    }
-
-    // Try as file path
-    if let Ok(result) = resolve_file(backend, input).await {
-        return Ok(result);
-    }
-
-    // Try as tag
-    if let Ok(result) = resolve_tag(backend, input).await {
-        return Ok(result);
-    }
-
-    Err(WtgError::NotFound(input.to_string()))
 }
