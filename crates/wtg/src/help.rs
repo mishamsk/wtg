@@ -14,7 +14,11 @@ pub fn display_help() {
 
 {usage_header}
   {cmd} {examples}
-  {cmd} -r {repo_url} {examples}
+  {cmd} -r {repo_url} {examples_with_r}
+
+{options_header}
+  {opt_r}              GitHub repository (e.g., owner/repo)
+  {opt_fetch}          Fetch missing refs from remote when not found locally
 
 {what_header}
   {bullet} Throw anything at me: commits, issues, PRs, files, or tags
@@ -45,7 +49,11 @@ pub fn display_help() {
         usage_header = "USAGE".cyan().bold(),
         cmd = "wtg".cyan(),
         examples = "<COMMIT|ISSUE|FILE|TAG|URL>".yellow(),
+        examples_with_r = "<COMMIT|ISSUE|FILE|TAG>".yellow(),
         repo_url = "<REPO_URL>".yellow(),
+        options_header = "OPTIONS".cyan().bold(),
+        opt_r = "-r, --repo".green(),
+        opt_fetch = "    --fetch".green(),
         what_header = "WHAT I DO".cyan().bold(),
         bullet = "→",
         examples_header = "EXAMPLES".cyan().bold(),
