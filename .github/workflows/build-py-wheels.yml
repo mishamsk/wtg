@@ -108,7 +108,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install ${{ env.PACKAGE_NAME }} --find-links dist --force-reinstall
+          pip install ${{ env.PACKAGE_NAME }} --no-index --find-links dist --force-reinstall
           wtg --help
       - name: "Upload wheels"
         uses: actions/upload-artifact@v4
@@ -149,7 +149,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/Scripts/activate
-          pip install ${{ env.PACKAGE_NAME }} --find-links dist --force-reinstall
+          pip install ${{ env.PACKAGE_NAME }} --no-index --find-links dist --force-reinstall
           wtg --help
       - name: "Upload wheels"
         uses: actions/upload-artifact@v4
@@ -191,7 +191,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install ${{ env.PACKAGE_NAME }} --find-links dist --force-reinstall
+          pip install ${{ env.PACKAGE_NAME }} --no-index --find-links dist --force-reinstall
           wtg --help
       - name: "Upload wheels"
         uses: actions/upload-artifact@v4
