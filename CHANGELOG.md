@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Backend abstraction with Git, GitHub, and combined implementations for local-first resolution with API fallback.
 - New input parsing pipeline that standardizes queries and makes GitHub URL handling more robust and secure.
 - Resolution layer to identify issues, PRs, commits, files, and tags from structured inputs.
+- `--fetch` flag to opt-in into automatically fetching from remote when running in a local checkout (useful to ensure up-to-date tags).
 
 ### Changed
 - GitHub repository detection now prefers upstream remotes and iterates until a GitHub remote is found.
