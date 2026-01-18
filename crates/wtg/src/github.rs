@@ -643,6 +643,30 @@ impl GitHubClient {
         })
     }
 
+    /// Fetch tag info by name.
+    /// Uses the commits API (which accepts refs) to resolve the tag to a commit,
+    /// then optionally enriches with release info if available.
+    pub async fn fetch_tag(&self, repo_info: &GhRepoInfo, tag_name: &str) -> Option<TagInfo> {
+        // Use commits API with tag name as ref to get the commit
+        let commit = self.fetch_commit_full_info(repo_info, tag_name).await?;
+
+        // Try to get release info (may not exist if tag has no release)
+        let release = self.fetch_release_by_tag(repo_info, tag_name).await;
+
+        let semver_info = parse_semver(tag_name);
+
+        Some(TagInfo {
+            name: tag_name.to_string(),
+            commit_hash: commit.hash,
+            semver_info,
+            created_at: commit.date,
+            is_release: release.is_some(),
+            release_name: release.as_ref().and_then(|r| r.name.clone()),
+            release_url: release.as_ref().map(|r| r.url.clone()),
+            published_at: release.and_then(|r| r.published_at),
+        })
+    }
+
     /// Build GitHub URLs for various things
     /// Build a commit URL (fallback when API data unavailable)
     /// Uses URL encoding to prevent injection

@@ -136,8 +136,15 @@ impl Backend for GitHubBackend {
     }
 
     // ============================================
-    // Release operations
+    // Tag/Release operations
     // ============================================
+
+    async fn find_tag(&self, name: &str) -> WtgResult<TagInfo> {
+        self.client
+            .fetch_tag(&self.gh_repo_info, name)
+            .await
+            .ok_or_else(|| WtgError::NotFound(format!("Tag {name}")))
+    }
 
     async fn find_release_for_commit(
         &self,
