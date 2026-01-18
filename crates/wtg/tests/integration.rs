@@ -165,6 +165,70 @@ async fn integration_identify_zed_issue_41633() {
     assert_eq!(release.name, "v0.212.0-pre");
 }
 
+/// Test end-to-end resolution of a go-task/task issue through PR, commit, and release.
+/// This is a cross-project PR: the issue is in go-task/task but the fixing PR
+/// comes from a different author than the issue reporter.
+/// <https://github.com/go-task/task/issues/1322>
+#[tokio::test]
+async fn integration_identify_go_task_issue_1322() {
+    use wtg_cli::backend::resolve_backend;
+    use wtg_cli::parse_input::try_parse_input;
+    use wtg_cli::resolution::{EntryPoint, IdentifiedThing, resolve};
+
+    // Step 1: Parse the GitHub issue URL (same as CLI)
+    let parsed_input = try_parse_input("https://github.com/go-task/task/issues/1322", None)
+        .expect("Failed to parse URL");
+
+    // Step 2: Create backend (same as CLI)
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+
+    // Step 3: Disambiguate the query (same as CLI)
+    let query = backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate query");
+
+    // Step 4: Resolve (same as CLI)
+    let result = resolve(backend.as_ref(), &query)
+        .await
+        .expect("Failed to resolve");
+
+    // Verify the result
+    let IdentifiedThing::Enriched(info) = result else {
+        panic!("Expected Enriched result, got {result:?}");
+    };
+
+    // Entry point should be IssueNumber
+    assert!(
+        matches!(info.entry_point, EntryPoint::IssueNumber(1322)),
+        "Expected IssueNumber(1322) entry point, got {:?}",
+        info.entry_point
+    );
+
+    // Verify issue
+    let issue = info.issue.as_ref().expect("Expected issue info");
+    assert_eq!(issue.number, 1322);
+    assert_eq!(issue.author.as_deref(), Some("StefanBRas"));
+
+    // Verify PR
+    let pr = info.pr.as_ref().expect("Expected PR info");
+    assert_eq!(pr.number, 2053);
+    assert_eq!(pr.author.as_deref(), Some("vmaerten"));
+    assert!(pr.merged, "Expected PR to be merged");
+
+    // Verify commit
+    let commit = info.commit.as_ref().expect("Expected commit info");
+    assert!(
+        commit.hash.starts_with("15b7e3c"),
+        "Expected commit hash to start with 15b7e3c, got {}",
+        commit.hash
+    );
+
+    // Verify release
+    let release = info.release.as_ref().expect("Expected release info");
+    assert_eq!(release.name, "v3.45.5");
+}
+
 /// Convert `IdentifiedThing` to a consistent snapshot structure
 fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
     match result {
