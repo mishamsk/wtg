@@ -21,6 +21,7 @@ pub mod output;
 pub mod parse_input;
 pub mod remote;
 pub mod resolution;
+pub mod semver;
 
 /// Run the CLI using the process arguments.
 pub fn run() -> WtgResult<()> {
