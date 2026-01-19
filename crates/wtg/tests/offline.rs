@@ -164,6 +164,29 @@ async fn test_identify_nonexistent(test_repo: TestRepoFixture) {
     assert!(result.is_err());
 }
 
+/// Test finding previous tag for a semver release
+#[rstest]
+#[tokio::test]
+async fn test_find_previous_tag(test_repo: TestRepoFixture) {
+    let backend = GitBackend::new(test_repo.repo);
+
+    // The test repo has: commit0 (initial), commit1 (v1.0.0 tag), commit2 (beta-release tag)
+    // v1.0.0 is the only semver tag, so it should have no previous semver tag
+    let prev = backend.find_previous_tag("v1.0.0").await.unwrap();
+    assert!(
+        prev.is_none(),
+        "v1.0.0 is the first semver tag, should have no previous"
+    );
+
+    // beta-release is not a semver tag, so find_previous_tag should return None
+    // (the function only finds previous *semver* tags)
+    let prev_beta = backend.find_previous_tag("beta-release").await.unwrap();
+    assert!(
+        prev_beta.is_none(),
+        "beta-release is not a semver tag, should have no previous semver tag"
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn disambiguates_branch_paths_with_slashes() {
