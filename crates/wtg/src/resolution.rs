@@ -301,9 +301,106 @@ async fn resolve_file(
     })))
 }
 
+/// Get repository path from current directory.
+fn get_repo_path() -> Option<std::path::PathBuf> {
+    std::env::current_dir().ok()
+}
+
+/// Select the best changes source, falling back to commits if needed.
+async fn select_best_changes(
+    backend: &dyn Backend,
+    tag_name: &str,
+    release_body: Option<&str>,
+    changelog_content: Option<&str>,
+) -> (
+    Option<String>,
+    Option<ChangesSource>,
+    usize,
+    Vec<CommitInfo>,
+) {
+    use crate::changelog;
+
+    // Compare release body and changelog, pick the more substantial one
+    let release_len = release_body.map(|s| s.trim().len()).unwrap_or(0);
+    let changelog_len = changelog_content.map(|s| s.trim().len()).unwrap_or(0);
+
+    if release_len > 0 || changelog_len > 0 {
+        let (content, source) = if release_len >= changelog_len && release_len > 0 {
+            (
+                release_body.unwrap().to_string(),
+                ChangesSource::GitHubRelease,
+            )
+        } else {
+            (
+                changelog_content.unwrap().to_string(),
+                ChangesSource::Changelog,
+            )
+        };
+
+        let (truncated_content, remaining) = changelog::truncate_content(&content);
+        return (
+            Some(truncated_content.to_string()),
+            Some(source),
+            remaining,
+            Vec::new(),
+        );
+    }
+
+    // Fall back to commits
+    if let Ok(Some(prev_tag)) = backend.find_previous_tag(tag_name).await {
+        if let Ok(commits) = backend
+            .commits_between_tags(&prev_tag.name, tag_name, 5)
+            .await
+        {
+            if !commits.is_empty() {
+                return (
+                    None,
+                    Some(ChangesSource::Commits {
+                        previous_tag: prev_tag.name,
+                    }),
+                    0,
+                    commits,
+                );
+            }
+        }
+    }
+
+    // No changes available
+    (None, None, 0, Vec::new())
+}
+
 /// Resolve a tag name to `IdentifiedThing`.
 async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedThing> {
+    use crate::changelog;
+
     let tag = backend.find_tag(name).await?;
     let url = backend.tag_url(name);
-    Ok(IdentifiedThing::TagOnly(Box::new(tag), url))
+
+    // Try to get changelog section
+    let changelog_content = if let Some(repo_path) = get_repo_path() {
+        changelog::parse_changelog_for_version(&repo_path, name)
+    } else {
+        None
+    };
+
+    // For now, release_body is None - Task 9 will add fetch_release_body
+    let release_body: Option<String> = None;
+
+    // Determine best source and get commits if needed
+    let (changes, source, truncated, commits) = select_best_changes(
+        backend,
+        name,
+        release_body.as_deref(),
+        changelog_content.as_deref(),
+    )
+    .await;
+
+    Ok(IdentifiedThing::Tag(Box::new(TagResult {
+        tag_info: tag,
+        github_url: url,
+        changes,
+        changes_source: source,
+        truncated_lines: truncated,
+        commits,
+    })))
 }
