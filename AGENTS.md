@@ -23,7 +23,7 @@ Cli + parse_input -> ParsedInput { Query, GhRepoInfo? }
 backend::resolve_backend -> ResolvedBackend { Backend, notice? }
    |
    v
-resolution::resolve -> IdentifiedThing (EnrichedInfo | FileResult | TagOnly)
+resolution::resolve -> IdentifiedThing (EnrichedInfo | FileResult | Tag)
    |
    v
 output::display -> stdout/stderr
