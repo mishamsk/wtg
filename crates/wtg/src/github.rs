@@ -1,4 +1,4 @@
-use std::{env, fs, future::Future, pin::Pin, sync::LazyLock, time::Duration};
+use std::{env, fs, future::Future, pin::Pin, sync::LazyLock, sync::RwLock, time::Duration};
 
 use chrono::{DateTime, Utc};
 use octocrab::{
@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, TagInfo, parse_semver};
+use crate::notice::{Notice, NoticeCallback, no_notices};
 use crate::parse_input::parse_github_repo_url;
 
 impl From<RepoCommit> for CommitInfo {
@@ -104,7 +105,6 @@ impl GhRepoInfo {
 /// - Supports fallback to anonymous requests on SAML errors via backup client.
 /// - Converts known octocrab errors into `WtgError` variants.
 /// - Returns `None` from `new()` if no client can be created.
-#[derive(Debug)]
 pub struct GitHubClient {
     main_client: Octocrab,
     /// Backup client for SAML fallback. Only populated when `main_client` is authenticated.
@@ -112,6 +112,9 @@ pub struct GitHubClient {
     backup_client: LazyLock<Option<Octocrab>>,
     /// Whether `main_client` is authenticated (vs anonymous).
     is_authenticated: bool,
+    /// Callback for emitting notices (e.g., rate limit hit).
+    /// Uses `RwLock` to allow setting callback after construction (when behind `Arc`).
+    notice_callback: RwLock<NoticeCallback>,
 }
 
 /// Information about a Pull Request
@@ -218,6 +221,7 @@ impl GitHubClient {
                 main_client: auth,
                 backup_client: LazyLock::new(Self::build_anonymous_client),
                 is_authenticated: true,
+                notice_callback: RwLock::new(no_notices()),
             });
         }
 
@@ -228,7 +232,20 @@ impl GitHubClient {
             main_client: anonymous,
             backup_client: LazyLock::new(|| None),
             is_authenticated: false,
+            notice_callback: RwLock::new(no_notices()),
         })
+    }
+
+    /// Set the notice callback for this client.
+    /// Can be called even when client is behind an `Arc`.
+    pub fn set_notice_callback(&self, callback: NoticeCallback) {
+        *self.notice_callback.write().unwrap() = callback;
+    }
+
+    /// Emit a notice via the callback.
+    fn emit(&self, notice: Notice) {
+        let cb = self.notice_callback.read().unwrap();
+        (cb)(notice);
     }
 
     /// Build an authenticated octocrab client
@@ -312,7 +329,7 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         commit_hash: &str,
     ) -> Option<CommitInfo> {
-        let commit = self
+        let commit = match self
             .call_client_api_with_fallback(move |client| {
                 let hash = commit_hash.to_string();
                 let repo_info = repo_info.clone();
@@ -324,14 +341,26 @@ impl GitHubClient {
                 })
             })
             .await
-            .ok()?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::debug!(
+                    "fetch_commit_full_info failed for {}/{} commit {}: {:?}",
+                    repo_info.owner(),
+                    repo_info.repo(),
+                    commit_hash,
+                    e
+                );
+                return None;
+            }
+        };
 
         Some(commit.into())
     }
 
     /// Try to fetch a PR
     pub async fn fetch_pr(&self, repo_info: &GhRepoInfo, number: u64) -> Option<PullRequestInfo> {
-        let pr = self
+        let pr = match self
             .call_client_api_with_fallback(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -342,7 +371,19 @@ impl GitHubClient {
                 })
             })
             .await
-            .ok()?;
+        {
+            Ok(p) => p,
+            Err(e) => {
+                log::debug!(
+                    "fetch_pr failed for {}/{} PR #{}: {:?}",
+                    repo_info.owner(),
+                    repo_info.repo(),
+                    number,
+                    e
+                );
+                return None;
+            }
+        };
 
         Some(pr.into())
     }
@@ -353,7 +394,7 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         number: u64,
     ) -> Option<ExtendedIssueInfo> {
-        let issue = self
+        let issue = match self
             .call_client_api_with_fallback(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -364,7 +405,19 @@ impl GitHubClient {
                 })
             })
             .await
-            .ok()?;
+        {
+            Ok(i) => i,
+            Err(e) => {
+                log::debug!(
+                    "fetch_issue failed for {}/{} issue #{}: {:?}",
+                    repo_info.owner(),
+                    repo_info.repo(),
+                    number,
+                    e
+                );
+                return None;
+            }
+        };
 
         let mut issue_info = ExtendedIssueInfo::try_from(issue).ok()?;
 
@@ -568,7 +621,7 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         tag: &str,
     ) -> Option<ReleaseInfo> {
-        let release = self
+        let release = match self
             .call_client_api_with_fallback(move |client| {
                 let tag = tag.to_string();
                 let repo_info = repo_info.clone();
@@ -581,7 +634,19 @@ impl GitHubClient {
                 })
             })
             .await
-            .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::debug!(
+                    "fetch_release_by_tag failed for {}/{} tag {}: {:?}",
+                    repo_info.owner(),
+                    repo_info.repo(),
+                    tag,
+                    e
+                );
+                return None;
+            }
+        };
 
         Some(ReleaseInfo {
             tag_name: release.tag_name,
@@ -603,7 +668,7 @@ impl GitHubClient {
         target_commit: &str,
     ) -> Option<TagInfo> {
         // Use compare API with per_page=1 to optimize
-        let compare = self
+        let compare = match self
             .call_client_api_with_fallback(move |client| {
                 let tag_name = release.tag_name.clone();
                 let target_commit = target_commit.to_string();
@@ -618,7 +683,20 @@ impl GitHubClient {
                 })
             })
             .await
-            .ok()?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::debug!(
+                    "fetch_tag_info_for_release failed for {}/{} tag {} vs commit {}: {:?}",
+                    repo_info.owner(),
+                    repo_info.repo(),
+                    release.tag_name,
+                    target_commit,
+                    e
+                );
+                return None;
+            }
+        };
 
         // If status is "behind" or "identical", the target commit is in the tag's history
         // "ahead" or "diverged" means the commit is NOT in the tag
@@ -746,6 +824,7 @@ impl GitHubClient {
 
     /// Call a GitHub API with fallback to backup client on SAML errors.
     /// Returns results & the client used, or error.
+    /// Emits `Notice::GhRateLimitHit` if rate limit is detected.
     async fn call_api_and_get_client<F, T>(&self, api_call: F) -> WtgResult<(T, &Octocrab)>
     where
         for<'a> F: Fn(&'a Octocrab) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
@@ -754,12 +833,24 @@ impl GitHubClient {
         let main_error = match Self::await_with_timeout_and_error(api_call(&self.main_client)).await
         {
             Ok(result) => return Ok((result, &self.main_client)),
+            Err(e) if e.is_gh_rate_limit() => {
+                log::debug!(
+                    "GitHub API rate limit hit (authenticated={}): {:?}",
+                    self.is_authenticated,
+                    e
+                );
+                self.emit(Notice::GhRateLimitHit {
+                    authenticated: self.is_authenticated,
+                });
+                return Err(e);
+            }
             Err(e) if e.is_gh_saml() && self.is_authenticated => {
                 // SAML error with authenticated client - fall through to try backup
                 e
             }
             Err(e) => {
                 // Non-SAML error, or SAML with anonymous client (no fallback possible)
+                log::debug!("GitHub API error: {e:?}");
                 return Err(e);
             }
         };
@@ -773,8 +864,20 @@ impl GitHubClient {
         // Try the backup, but if it also fails with SAML, return original error
         match Self::await_with_timeout_and_error(api_call(backup)).await {
             Ok(result) => Ok((result, backup)),
+            Err(e) if e.is_gh_rate_limit() => {
+                log::debug!("GitHub API rate limit hit on backup client: {e:?}");
+                // Emit notice for anonymous fallback (authenticated was true to reach here,
+                // but backup is anonymous)
+                self.emit(Notice::GhRateLimitHit {
+                    authenticated: false,
+                });
+                Err(e)
+            }
             Err(e) if e.is_gh_saml() => Err(main_error), // Return original SAML error
-            Err(e) => Err(e),
+            Err(e) => {
+                log::debug!("GitHub API error on backup client: {e:?}");
+                Err(e)
+            }
         }
     }
 
