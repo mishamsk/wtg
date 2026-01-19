@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased] - ReleaseDate
 
 ### Added
-- Debug logging for GitHub API operations via `log` crate (compiled away when no logger configured).
+- Add opt-in debug logging via `log` crate.
 - `Notice::GhRateLimitHit` to surface rate limit errors to users with actionable guidance.
 
 ### Changed
