@@ -9,7 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased] - ReleaseDate
 
 ### Added
--
+- Debug logging for GitHub API operations via `log` crate (compiled away when no logger configured).
+- `Notice::GhRateLimitHit` to surface rate limit errors to users with actionable guidance.
 
 ### Changed
 -
@@ -21,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 -
 
 ### Fixed
--
+- CI integration tests now use authenticated GitHub API access (5000 req/hr vs 60 req/hr anonymous).
 
 ### Security
 -
