@@ -346,7 +346,26 @@ impl Backend for CombinedBackend {
     // ============================================
 
     async fn find_tag(&self, name: &str) -> WtgResult<TagInfo> {
-        self.git.find_tag(name).await
+        let mut tag = self.git.find_tag(name).await?;
+
+        // Check if tag has a GitHub release (git backend can't determine this)
+        if let Some(release) = self
+            .github
+            .client()
+            .fetch_release_by_tag(self.github.repo_info(), name)
+            .await
+        {
+            tag.is_release = true;
+            tag.release_name = release.name;
+            tag.release_url = Some(release.url.clone());
+            tag.published_at = release.published_at;
+            tag.tag_url = Some(release.url);
+        } else {
+            // Plain tag - set tag_url to tree view
+            tag.tag_url = self.tag_url(name);
+        }
+
+        Ok(tag)
     }
 
     async fn find_previous_tag(&self, tag_name: &str) -> WtgResult<Option<TagInfo>> {
