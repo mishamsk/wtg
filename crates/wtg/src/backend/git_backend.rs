@@ -248,6 +248,15 @@ impl Backend for GitBackend {
         Ok(candidates.first().map(|t| (*t).clone()))
     }
 
+    async fn commits_between_tags(
+        &self,
+        from_tag: &str,
+        to_tag: &str,
+        limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        Ok(self.repo.commits_between(from_tag, to_tag, limit))
+    }
+
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
             ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),

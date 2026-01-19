@@ -228,6 +228,17 @@ impl Backend for GitHubBackend {
         Ok(None)
     }
 
+    async fn commits_between_tags(
+        &self,
+        _from_tag: &str,
+        _to_tag: &str,
+        _limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        // GitHub compare API is not yet implemented in GitHubClient.
+        // The CombinedBackend will use the git backend for this operation.
+        Err(WtgError::Unsupported("GitHub commits between tags".into()))
+    }
+
     async fn find_release_for_commit(
         &self,
         commit_hash: &str,

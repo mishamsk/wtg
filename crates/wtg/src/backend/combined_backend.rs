@@ -353,6 +353,23 @@ impl Backend for CombinedBackend {
         self.git.find_previous_tag(tag_name).await
     }
 
+    async fn commits_between_tags(
+        &self,
+        from_tag: &str,
+        to_tag: &str,
+        limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        // Try git first, fall back to GitHub
+        match self.git.commits_between_tags(from_tag, to_tag, limit).await {
+            Ok(commits) if !commits.is_empty() => Ok(commits),
+            _ => {
+                self.github
+                    .commits_between_tags(from_tag, to_tag, limit)
+                    .await
+            }
+        }
+    }
+
     async fn find_release_for_commit(
         &self,
         commit_hash: &str,

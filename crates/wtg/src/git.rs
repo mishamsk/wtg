@@ -552,6 +552,50 @@ impl GitRepo {
         })
     }
 
+    /// Get commits between two refs (from exclusive, to inclusive).
+    /// Returns commits in reverse chronological order (most recent first).
+    pub fn commits_between(&self, from_ref: &str, to_ref: &str, limit: usize) -> Vec<CommitInfo> {
+        self.with_repo(|repo| {
+            let mut result = Vec::new();
+
+            let Ok(to_obj) = repo.revparse_single(to_ref) else {
+                return result;
+            };
+            let Ok(to_commit) = to_obj.peel_to_commit() else {
+                return result;
+            };
+
+            let Ok(from_obj) = repo.revparse_single(from_ref) else {
+                return result;
+            };
+            let Ok(from_commit) = from_obj.peel_to_commit() else {
+                return result;
+            };
+
+            let Ok(mut revwalk) = repo.revwalk() else {
+                return result;
+            };
+
+            // Walk from to_ref back, stopping at from_ref
+            if revwalk.push(to_commit.id()).is_err() {
+                return result;
+            }
+            if revwalk.hide(from_commit.id()).is_err() {
+                return result;
+            }
+
+            for oid in revwalk.take(limit) {
+                let Ok(oid) = oid else { continue };
+                let Ok(commit) = repo.find_commit(oid) else {
+                    continue;
+                };
+                result.push(Self::commit_to_info(&commit));
+            }
+
+            result
+        })
+    }
+
     /// Expose tags that contain the specified commit.
     /// If `allow_fetch` is true, ensures tags are fetched first.
     pub fn tags_containing_commit(&self, commit_hash: &str) -> Vec<TagInfo> {

@@ -92,6 +92,18 @@ pub trait Backend: Send + Sync {
         Err(WtgError::Unsupported("find previous tag".into()))
     }
 
+    /// Get commits between two tags (`from_tag` exclusive, `to_tag` inclusive).
+    ///
+    /// Returns up to `limit` commits, most recent first.
+    async fn commits_between_tags(
+        &self,
+        _from_tag: &str,
+        _to_tag: &str,
+        _limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        Err(WtgError::Unsupported("commits between tags".into()))
+    }
+
     /// Disambiguate a parsed query into a concrete query.
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
