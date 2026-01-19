@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::{Backend, NoticeCallback};
+use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo, looks_like_commit_hash};
 use crate::github::GitHubClient;
@@ -274,6 +275,10 @@ impl Backend for GitBackend {
         filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
         self.find_best_tag_for_commit(commit_hash, filter)
+    }
+
+    async fn changelog_for_version(&self, version: &str) -> Option<String> {
+        changelog::parse_changelog_for_version(self.repo.path(), version)
     }
 
     // ============================================

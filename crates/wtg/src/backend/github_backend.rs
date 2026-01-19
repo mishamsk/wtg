@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 use super::Backend;
+use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, TagInfo, looks_like_commit_hash};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
@@ -256,6 +257,21 @@ impl Backend for GitHubBackend {
             .fetch_release_by_tag(&self.gh_repo_info, tag_name)
             .await?;
         release.body.filter(|b| !b.trim().is_empty())
+    }
+
+    async fn changelog_for_version(&self, version: &str) -> Option<String> {
+        // Try common CHANGELOG.md variations (case-insensitive on GitHub)
+        for path in ["CHANGELOG.md", "changelog.md", "Changelog.md"] {
+            if let Some(content) = self
+                .client
+                .fetch_file_content(&self.gh_repo_info, path)
+                .await
+                && let Some(section) = changelog::extract_version_section(&content, version)
+            {
+                return Some(section);
+            }
+        }
+        None
     }
 
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {

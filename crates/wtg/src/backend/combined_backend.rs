@@ -384,6 +384,15 @@ impl Backend for CombinedBackend {
         self.github.fetch_release_body(tag_name).await
     }
 
+    async fn changelog_for_version(&self, version: &str) -> Option<String> {
+        // Try git backend first (local filesystem is faster)
+        if let Some(content) = self.git.changelog_for_version(version).await {
+            return Some(content);
+        }
+        // Fallback to GitHub API
+        self.github.changelog_for_version(version).await
+    }
+
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
             ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),

@@ -53,7 +53,8 @@ fn find_changelog_file(repo_root: &Path) -> Option<std::path::PathBuf> {
 ///
 /// Matches Keep a Changelog format: `## [version]` or `## [version] - date`
 /// Version matching is flexible: strips 'v' prefix from both sides for comparison.
-fn extract_version_section(content: &str, version: &str) -> Option<String> {
+#[must_use]
+pub fn extract_version_section(content: &str, version: &str) -> Option<String> {
     // Normalize version by stripping 'v' prefix
     let normalized_version = version.strip_prefix('v').unwrap_or(version);
 

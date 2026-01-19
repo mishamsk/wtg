@@ -133,6 +133,15 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Parse changelog for a specific version from repository root.
+    ///
+    /// Returns the changelog section content for the given version, or None if
+    /// not found. Backends implement this to access CHANGELOG.md via their
+    /// native method (local filesystem or API).
+    async fn changelog_for_version(&self, _version: &str) -> Option<String> {
+        None
+    }
+
     // ============================================
     // Issue operations (default: Unsupported)
     // ============================================

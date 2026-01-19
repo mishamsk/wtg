@@ -748,6 +748,46 @@ impl GitHubClient {
         })
     }
 
+    /// Fetch file content from the default branch.
+    ///
+    /// Returns the decoded file content as a String, or None if the file
+    /// doesn't exist or can't be decoded (e.g., binary files).
+    pub async fn fetch_file_content(&self, repo_info: &GhRepoInfo, path: &str) -> Option<String> {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
+
+        let content = self
+            .call_client_api_with_fallback(move |client| {
+                let path = path.to_string();
+                let repo_info = repo_info.clone();
+                Box::pin(async move {
+                    client
+                        .repos(repo_info.owner(), repo_info.repo())
+                        .get_content()
+                        .path(&path)
+                        .send()
+                        .await
+                })
+            })
+            .await
+            .ok()?;
+
+        // The API returns an array for directories, single item for files
+        let file_content = match content.items.into_iter().next()? {
+            octocrab::models::repos::Content {
+                content: Some(encoded),
+                ..
+            } => {
+                // Content is base64 encoded with newlines, need to remove them
+                let cleaned: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
+                STANDARD.decode(&cleaned).ok()?
+            }
+            _ => return None, // No content or it's a directory
+        };
+
+        String::from_utf8(file_content).ok()
+    }
+
     /// Build GitHub URLs for various things
     /// Build a commit URL (fallback when API data unavailable)
     /// Uses URL encoding to prevent injection
