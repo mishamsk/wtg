@@ -368,18 +368,11 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
     // Try to get changelog section via backend
     let changelog_content = backend.changelog_for_version(name).await;
 
-    // Try to get release body from GitHub
-    let release_body = backend.fetch_release_body(name).await;
-
-    // Determine if this is a release: either tag.is_release flag is set,
-    // or we successfully fetched a release body (which means the release exists)
-    let is_release = tag.is_release || release_body.is_some();
-
-    // Choose URL based on whether this is a release or plain tag
-    let url = if is_release {
-        backend.release_tag_url(name)
+    // Try to get release body from GitHub (only if it's a release)
+    let release_body = if tag.is_release {
+        backend.fetch_release_body(name).await
     } else {
-        backend.tag_url(name)
+        None
     };
 
     // Determine best source and get commits if needed
@@ -392,8 +385,8 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
     .await;
 
     Ok(IdentifiedThing::Tag(Box::new(TagResult {
-        tag_info: tag,
-        github_url: url,
+        tag_info: tag.clone(),
+        github_url: tag.tag_url,
         changes,
         changes_source: source,
         truncated_lines: truncated,
