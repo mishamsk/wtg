@@ -1,4 +1,4 @@
-use std::{env, fs, future::Future, pin::Pin, sync::LazyLock, sync::RwLock, time::Duration};
+use std::{env, fs, future::Future, pin::Pin, sync::LazyLock, sync::OnceLock, time::Duration};
 
 use chrono::{DateTime, Utc};
 use octocrab::{
@@ -10,9 +10,9 @@ use octocrab::{
 };
 use serde::Deserialize;
 
-use crate::error::{WtgError, WtgResult};
+use crate::error::{LogError, WtgError, WtgResult};
 use crate::git::{CommitInfo, TagInfo, parse_semver};
-use crate::notice::{Notice, NoticeCallback, no_notices};
+use crate::notice::{Notice, NoticeCallback};
 use crate::parse_input::parse_github_repo_url;
 
 impl From<RepoCommit> for CommitInfo {
@@ -113,8 +113,8 @@ pub struct GitHubClient {
     /// Whether `main_client` is authenticated (vs anonymous).
     is_authenticated: bool,
     /// Callback for emitting notices (e.g., rate limit hit).
-    /// Uses `RwLock` to allow setting callback after construction (when behind `Arc`).
-    notice_callback: RwLock<NoticeCallback>,
+    /// Uses `OnceLock` since callback is set at most once after construction.
+    notice_callback: OnceLock<NoticeCallback>,
 }
 
 /// Information about a Pull Request
@@ -221,7 +221,7 @@ impl GitHubClient {
                 main_client: auth,
                 backup_client: LazyLock::new(Self::build_anonymous_client),
                 is_authenticated: true,
-                notice_callback: RwLock::new(no_notices()),
+                notice_callback: OnceLock::new(),
             });
         }
 
@@ -232,20 +232,23 @@ impl GitHubClient {
             main_client: anonymous,
             backup_client: LazyLock::new(|| None),
             is_authenticated: false,
-            notice_callback: RwLock::new(no_notices()),
+            notice_callback: OnceLock::new(),
         })
     }
 
     /// Set the notice callback for this client.
     /// Can be called even when client is behind an `Arc`.
+    /// First call wins - subsequent calls are ignored.
     pub fn set_notice_callback(&self, callback: NoticeCallback) {
-        *self.notice_callback.write().unwrap() = callback;
+        // set() returns Err if already set - we ignore since first-set wins
+        let _ = self.notice_callback.set(callback);
     }
 
-    /// Emit a notice via the callback.
+    /// Emit a notice via the callback, if one is set.
     fn emit(&self, notice: Notice) {
-        let cb = self.notice_callback.read().unwrap();
-        (cb)(notice);
+        if let Some(cb) = self.notice_callback.get() {
+            (cb)(notice);
+        }
     }
 
     /// Build an authenticated octocrab client
@@ -329,7 +332,7 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         commit_hash: &str,
     ) -> Option<CommitInfo> {
-        let commit = match self
+        let commit = self
             .call_client_api_with_fallback(move |client| {
                 let hash = commit_hash.to_string();
                 let repo_info = repo_info.clone();
@@ -341,26 +344,19 @@ impl GitHubClient {
                 })
             })
             .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::debug!(
-                    "fetch_commit_full_info failed for {}/{} commit {}: {:?}",
-                    repo_info.owner(),
-                    repo_info.repo(),
-                    commit_hash,
-                    e
-                );
-                return None;
-            }
-        };
+            .log_err(&format!(
+                "fetch_commit_full_info failed for {}/{} commit {}",
+                repo_info.owner(),
+                repo_info.repo(),
+                commit_hash
+            ))?;
 
         Some(commit.into())
     }
 
     /// Try to fetch a PR
     pub async fn fetch_pr(&self, repo_info: &GhRepoInfo, number: u64) -> Option<PullRequestInfo> {
-        let pr = match self
+        let pr = self
             .call_client_api_with_fallback(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -371,19 +367,12 @@ impl GitHubClient {
                 })
             })
             .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                log::debug!(
-                    "fetch_pr failed for {}/{} PR #{}: {:?}",
-                    repo_info.owner(),
-                    repo_info.repo(),
-                    number,
-                    e
-                );
-                return None;
-            }
-        };
+            .log_err(&format!(
+                "fetch_pr failed for {}/{} PR #{}",
+                repo_info.owner(),
+                repo_info.repo(),
+                number
+            ))?;
 
         Some(pr.into())
     }
@@ -394,7 +383,7 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         number: u64,
     ) -> Option<ExtendedIssueInfo> {
-        let issue = match self
+        let issue = self
             .call_client_api_with_fallback(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -405,19 +394,12 @@ impl GitHubClient {
                 })
             })
             .await
-        {
-            Ok(i) => i,
-            Err(e) => {
-                log::debug!(
-                    "fetch_issue failed for {}/{} issue #{}: {:?}",
-                    repo_info.owner(),
-                    repo_info.repo(),
-                    number,
-                    e
-                );
-                return None;
-            }
-        };
+            .log_err(&format!(
+                "fetch_issue failed for {}/{} issue #{}",
+                repo_info.owner(),
+                repo_info.repo(),
+                number
+            ))?;
 
         let mut issue_info = ExtendedIssueInfo::try_from(issue).ok()?;
 
@@ -621,7 +603,7 @@ impl GitHubClient {
         repo_info: &GhRepoInfo,
         tag: &str,
     ) -> Option<ReleaseInfo> {
-        let release = match self
+        let release = self
             .call_client_api_with_fallback(move |client| {
                 let tag = tag.to_string();
                 let repo_info = repo_info.clone();
@@ -634,19 +616,12 @@ impl GitHubClient {
                 })
             })
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                log::debug!(
-                    "fetch_release_by_tag failed for {}/{} tag {}: {:?}",
-                    repo_info.owner(),
-                    repo_info.repo(),
-                    tag,
-                    e
-                );
-                return None;
-            }
-        };
+            .log_err(&format!(
+                "fetch_release_by_tag failed for {}/{} tag {}",
+                repo_info.owner(),
+                repo_info.repo(),
+                tag
+            ))?;
 
         Some(ReleaseInfo {
             tag_name: release.tag_name,
@@ -668,7 +643,7 @@ impl GitHubClient {
         target_commit: &str,
     ) -> Option<TagInfo> {
         // Use compare API with per_page=1 to optimize
-        let compare = match self
+        let compare = self
             .call_client_api_with_fallback(move |client| {
                 let tag_name = release.tag_name.clone();
                 let target_commit = target_commit.to_string();
@@ -683,20 +658,13 @@ impl GitHubClient {
                 })
             })
             .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::debug!(
-                    "fetch_tag_info_for_release failed for {}/{} tag {} vs commit {}: {:?}",
-                    repo_info.owner(),
-                    repo_info.repo(),
-                    release.tag_name,
-                    target_commit,
-                    e
-                );
-                return None;
-            }
-        };
+            .log_err(&format!(
+                "fetch_tag_info_for_release failed for {}/{} tag {} vs commit {}",
+                repo_info.owner(),
+                repo_info.repo(),
+                release.tag_name,
+                target_commit
+            ))?;
 
         // If status is "behind" or "identical", the target commit is in the tag's history
         // "ahead" or "diverged" means the commit is NOT in the tag

@@ -294,3 +294,21 @@ impl WtgError {
         }
     }
 }
+
+/// Extension trait for logging errors before discarding them.
+pub trait LogError<T> {
+    /// Log the error at debug level and convert to Option.
+    fn log_err(self, context: &str) -> Option<T>;
+}
+
+impl<T> LogError<T> for WtgResult<T> {
+    fn log_err(self, context: &str) -> Option<T> {
+        match self {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::debug!("{context}: {e:?}");
+                None
+            }
+        }
+    }
+}
