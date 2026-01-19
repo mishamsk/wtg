@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use wtg_cli::backend::resolve_backend;
 use wtg_cli::parse_input::{ParsedInput, ParsedQuery, Query};
+use wtg_cli::release_filter::ReleaseFilter;
 use wtg_cli::resolution::IdentifiedThing;
 use wtg_cli::resolution::resolve;
 
@@ -23,7 +24,7 @@ async fn integration_identify_recent_commit() {
         .await
         .expect("Failed to disambiguate commit");
 
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify commit");
 
@@ -44,7 +45,7 @@ async fn integration_identify_tag() {
         .await
         .expect("Failed to disambiguate tag");
 
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify tag");
 
@@ -66,7 +67,7 @@ async fn integration_identify_file() {
         .await
         .expect("Failed to disambiguate file");
 
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify LICENSE");
 
@@ -125,7 +126,7 @@ async fn integration_identify_zed_issue_41633() {
         .expect("Failed to disambiguate query");
 
     // Step 4: Resolve (same as CLI)
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to resolve");
 
@@ -189,7 +190,7 @@ async fn integration_identify_go_task_issue_1322() {
         .expect("Failed to disambiguate query");
 
     // Step 4: Resolve (same as CLI)
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to resolve");
 
@@ -227,6 +228,103 @@ async fn integration_identify_go_task_issue_1322() {
     // Verify release
     let release = info.release.as_ref().expect("Expected release info");
     assert_eq!(release.name, "v3.45.5");
+}
+
+/// Test that skip-prereleases filter resolves to same tag as unrestricted
+/// when no pre-releases are present. Verifies filter doesn't break normal resolution.
+#[tokio::test]
+async fn integration_skip_prereleases_filter() {
+    let parsed_input = ParsedInput::new_local_query(ParsedQuery::Resolved(Query::GitCommit(
+        "6146f62054c1eb14792be673275f8bc9a2e223f3".to_string(),
+    )));
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate commit");
+
+    // Resolve without filter
+    let result_unrestricted = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
+        .await
+        .expect("Failed to resolve without filter");
+
+    // Resolve with SkipPrereleases filter
+    let result_filtered = resolve(backend.as_ref(), &query, &ReleaseFilter::SkipPrereleases)
+        .await
+        .expect("Failed to resolve with skip-prereleases filter");
+
+    // Both should resolve to the same tag (wtg repo has no pre-releases)
+    let tag_unrestricted = match &result_unrestricted {
+        IdentifiedThing::Enriched(info) => info.release.as_ref().map(|r| r.name.clone()),
+        _ => None,
+    };
+    let tag_filtered = match &result_filtered {
+        IdentifiedThing::Enriched(info) => info.release.as_ref().map(|r| r.name.clone()),
+        _ => None,
+    };
+    assert_eq!(
+        tag_unrestricted, tag_filtered,
+        "Filter should not change result when no pre-releases exist"
+    );
+}
+
+/// Test that specifying a nonexistent tag returns `TagNotFound` error.
+/// Uses a tag name that definitely doesn't exist in the wtg repo.
+#[tokio::test]
+async fn integration_nonexistent_tag_error() {
+    let parsed_input = ParsedInput::new_local_query(ParsedQuery::Resolved(Query::GitCommit(
+        "6146f62054c1eb14792be673275f8bc9a2e223f3".to_string(),
+    )));
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate commit");
+
+    // Tag that doesn't exist in wtg repo
+    let filter = ReleaseFilter::Specific("v999.999.999-never-exists".to_string());
+
+    let result = resolve(backend.as_ref(), &query, &filter).await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.is_tag_not_found(),
+        "Expected TagNotFound error, got {err:?}"
+    );
+}
+
+/// Test that specifying a valid tag returns that exact tag when commit is in it.
+#[tokio::test]
+async fn integration_specific_tag_found() {
+    let parsed_input = ParsedInput::new_local_query(ParsedQuery::Resolved(Query::GitCommit(
+        "6146f62054c1eb14792be673275f8bc9a2e223f3".to_string(),
+    )));
+    let backend = resolve_backend(&parsed_input, false).expect("Failed to create backend");
+    let query = backend
+        .disambiguate_query(parsed_input.query())
+        .await
+        .expect("Failed to disambiguate commit");
+
+    // Use v0.1.0 which exists and contains this commit
+    let filter = ReleaseFilter::Specific("v0.1.0".to_string());
+
+    let result = resolve(backend.as_ref(), &query, &filter)
+        .await
+        .expect("Failed to resolve with specific tag filter");
+
+    let IdentifiedThing::Enriched(info) = result else {
+        panic!("Expected Enriched result");
+    };
+
+    // Verify the release is the specific tag we asked for
+    let release = info
+        .release
+        .expect("Expected release info for commit in v0.1.0");
+    assert_eq!(
+        release.name, "v0.1.0",
+        "Release should be the specific tag requested"
+    );
 }
 
 /// Convert `IdentifiedThing` to a consistent snapshot structure

@@ -12,6 +12,7 @@ use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo, looks_like_commit_hash};
 use crate::github::GitHubClient;
 use crate::parse_input::{ParsedQuery, Query};
+use crate::release_filter::ReleaseFilter;
 
 /// Pure local git backend wrapping a `GitRepo`.
 ///
@@ -38,15 +39,42 @@ impl GitBackend {
         self.repo.set_notice_callback(cb);
     }
 
-    /// Find tags containing a commit and pick the best one.
-    fn find_best_tag_for_commit(&self, commit_hash: &str) -> Option<TagInfo> {
+    /// Find tags containing a commit and pick the best one, applying the filter.
+    fn find_best_tag_for_commit(
+        &self,
+        commit_hash: &str,
+        filter: &ReleaseFilter,
+    ) -> Option<TagInfo> {
+        // Fast path for specific tag lookup
+        if let Some(tag_name) = filter.specific_tag() {
+            // Find the tag first
+            let tag = self
+                .repo
+                .get_tags()
+                .into_iter()
+                .find(|t| t.name == tag_name)?;
+
+            // Check if the commit is in this tag
+            if self.repo.tag_contains_commit(&tag.commit_hash, commit_hash) {
+                return Some(tag);
+            }
+            return None;
+        }
+
         let candidates = self.repo.tags_containing_commit(commit_hash);
         if candidates.is_empty() {
             return None;
         }
 
+        // Apply filter to candidates
+        let filtered = filter.filter_tags(candidates);
+
+        if filtered.is_empty() {
+            return None;
+        }
+
         // Build timestamp map for sorting
-        let timestamps: HashMap<String, i64> = candidates
+        let timestamps: HashMap<String, i64> = filtered
             .iter()
             .map(|tag| {
                 (
@@ -57,7 +85,7 @@ impl GitBackend {
             .collect();
 
         // Pick best tag: prefer semver releases, then semver, then any release, then any
-        Self::pick_best_tag(&candidates, &timestamps)
+        Self::pick_best_tag(&filtered, &timestamps)
     }
 
     /// Pick the best tag from candidates based on priority rules.
@@ -186,8 +214,9 @@ impl Backend for GitBackend {
         &self,
         commit_hash: &str,
         _commit_date: Option<DateTime<Utc>>,
+        filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
-        self.find_best_tag_for_commit(commit_hash)
+        self.find_best_tag_for_commit(commit_hash, filter)
     }
 
     // ============================================

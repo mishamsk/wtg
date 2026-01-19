@@ -29,6 +29,20 @@ pub struct Cli {
     #[arg(long)]
     pub fetch: bool,
 
+    /// Skip pre-release versions when finding releases
+    ///
+    /// Filters out tags with pre-release identifiers (e.g., -beta, -rc, -alpha)
+    /// when determining which release contains a commit.
+    #[arg(short = 'S', long)]
+    pub skip_prereleases: bool,
+
+    /// Specific tag/release to check against
+    ///
+    /// If provided, checks whether the input (commit, PR, issue) is contained
+    /// in this specific release/tag rather than finding the earliest release.
+    #[arg(value_name = "RELEASE")]
+    pub release: Option<String>,
+
     /// Print help information
     #[arg(short, long, action = clap::ArgAction::Help)]
     help: Option<bool>,

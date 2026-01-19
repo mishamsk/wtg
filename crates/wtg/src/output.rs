@@ -7,13 +7,14 @@ use crate::error::WtgResult;
 use crate::git::{CommitInfo, TagInfo};
 use crate::github::PullRequestInfo;
 use crate::notice::Notice;
+use crate::release_filter::ReleaseFilter;
 use crate::remote::{RemoteHost, RemoteInfo};
 use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing, IssueInfo};
 
-pub fn display(thing: IdentifiedThing) -> WtgResult<()> {
+pub fn display(thing: IdentifiedThing, filter: &ReleaseFilter) -> WtgResult<()> {
     match thing {
-        IdentifiedThing::Enriched(info) => display_enriched(*info),
-        IdentifiedThing::File(file_result) => display_file(*file_result),
+        IdentifiedThing::Enriched(info) => display_enriched(*info, filter),
+        IdentifiedThing::File(file_result) => display_file(*file_result, filter),
         IdentifiedThing::TagOnly(tag_info, github_url) => {
             display_tag_warning(*tag_info, github_url);
         }
@@ -49,7 +50,7 @@ fn display_tag_warning(tag_info: TagInfo, github_url: Option<String>) {
 
 /// Display enriched info - the main display logic
 /// Order depends on what the user searched for
-fn display_enriched(info: EnrichedInfo) {
+fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
     match &info.entry_point {
         EntryPoint::IssueNumber(_) => {
             // User searched for issue - lead with issue
@@ -74,7 +75,7 @@ fn display_enriched(info: EnrichedInfo) {
             display_missing_info(&info);
 
             if let Some(commit_info) = info.commit.as_ref() {
-                display_release_info(info.release, commit_info.commit_url.as_deref());
+                display_release_info(info.release, commit_info.commit_url.as_deref(), filter);
             }
         }
         EntryPoint::PullRequestNumber(_) => {
@@ -95,7 +96,7 @@ fn display_enriched(info: EnrichedInfo) {
             display_missing_info(&info);
 
             if let Some(commit_info) = info.commit.as_ref() {
-                display_release_info(info.release, commit_info.commit_url.as_deref());
+                display_release_info(info.release, commit_info.commit_url.as_deref(), filter);
             }
         }
         _ => {
@@ -121,7 +122,7 @@ fn display_enriched(info: EnrichedInfo) {
             display_missing_info(&info);
 
             if let Some(commit_info) = info.commit.as_ref() {
-                display_release_info(info.release, commit_info.commit_url.as_deref());
+                display_release_info(info.release, commit_info.commit_url.as_deref(), filter);
             }
         }
     }
@@ -371,7 +372,7 @@ fn print_message_with_essay_joke(first_line: &str, full_text: Option<&str>, line
 }
 
 /// Display file information (special case)
-fn display_file(file_result: FileResult) {
+fn display_file(file_result: FileResult, filter: &ReleaseFilter) {
     let info = file_result.file_info;
 
     println!("{} {}", "📄 Found file:".green().bold(), info.path.cyan());
@@ -457,10 +458,55 @@ fn display_file(file_result: FileResult) {
     }
 
     // Release info
-    display_release_info(file_result.release, file_result.commit_url.as_deref());
+    display_release_info(
+        file_result.release,
+        file_result.commit_url.as_deref(),
+        filter,
+    );
 }
 
-fn display_release_info(release: Option<TagInfo>, commit_url: Option<&str>) {
+fn display_release_info(
+    release: Option<TagInfo>,
+    commit_url: Option<&str>,
+    filter: &ReleaseFilter,
+) {
+    // Special messaging when checking a specific release
+    if let Some(tag_name) = filter.specific_tag() {
+        println!("{}", "📦 Release check:".magenta().bold());
+        if let Some(tag) = release {
+            println!(
+                "   {} {}",
+                "✅".green(),
+                format!(
+                    "Yep, it's in there! {} has got your commit covered.",
+                    tag.name
+                )
+                .green()
+                .bold()
+            );
+            if tag.is_release {
+                if let Some(url) = &tag.release_url {
+                    print_link(url);
+                }
+            } else if let Some(url) = commit_url
+                && let Some((base_url, _)) = url.rsplit_once("/commit/")
+            {
+                let tag_url = format!("{base_url}/tree/{}", tag.name);
+                print_link(&tag_url);
+            }
+        } else {
+            println!(
+                "   {} {}",
+                "❌".red(),
+                format!("Nope! That commit missed the {tag_name} party.")
+                    .yellow()
+                    .italic()
+            );
+        }
+        return;
+    }
+
+    // Standard release info display
     println!("{}", "📦 First shipped in:".magenta().bold());
 
     match release {

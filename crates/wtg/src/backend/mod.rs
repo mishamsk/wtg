@@ -24,6 +24,7 @@ use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
 use crate::notice::{Notice, NoticeCallback, no_notices};
 use crate::parse_input::{ParsedInput, ParsedQuery, Query};
+use crate::release_filter::ReleaseFilter;
 use crate::remote::{RemoteHost, RemoteInfo};
 
 /// Unified backend trait for all git/GitHub operations.
@@ -93,10 +94,16 @@ pub trait Backend: Send + Sync {
     }
 
     /// Find a release/tag that contains the given commit.
+    ///
+    /// The `filter` parameter controls which tags are considered:
+    /// - `Unrestricted`: All tags (default behavior)
+    /// - `SkipPrereleases`: Filter out pre-release versions
+    /// - `Specific(tag)`: Check if the commit is in a specific tag
     async fn find_release_for_commit(
         &self,
         _commit_hash: &str,
         _commit_date: Option<DateTime<Utc>>,
+        _filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
         None
     }

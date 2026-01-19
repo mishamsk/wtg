@@ -14,6 +14,7 @@ use crate::git::{CommitInfo, TagInfo, looks_like_commit_hash};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
 use crate::notice::NoticeCallback;
 use crate::parse_input::{ParsedQuery, Query};
+use crate::release_filter::ReleaseFilter;
 
 /// Pure GitHub API backend.
 ///
@@ -67,13 +68,38 @@ impl GitHubBackend {
         &self,
         commit_hash: &str,
         since: DateTime<Utc>,
+        filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
+        // Fast path for specific tag lookup
+        if let Some(tag_name) = filter.specific_tag() {
+            // Fetch the specific tag
+            let tag = self.client.fetch_tag(&self.gh_repo_info, tag_name).await?;
+
+            // Check if commit is contained in this tag
+            if self
+                .client
+                .tag_contains_commit(&self.gh_repo_info, tag_name, commit_hash)
+                .await
+            {
+                return Some(tag);
+            }
+            return None;
+        }
+
         let releases = self
             .client
             .fetch_releases_since(&self.gh_repo_info, since)
             .await;
 
+        // Apply filter: skip prereleases if requested
+        let skip_prereleases = filter.skips_prereleases();
+
         for release in releases {
+            // Skip pre-releases if filter is active
+            if skip_prereleases && release.prerelease {
+                continue;
+            }
+
             if let Some(tag_info) = self
                 .client
                 .fetch_tag_info_for_release(&release, &self.gh_repo_info, commit_hash)
@@ -156,9 +182,11 @@ impl Backend for GitHubBackend {
         &self,
         commit_hash: &str,
         commit_date: Option<DateTime<Utc>>,
+        filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
         let since = commit_date.unwrap_or_else(Utc::now);
-        self.find_release_for_commit_impl(commit_hash, since).await
+        self.find_release_for_commit_impl(commit_hash, since, filter)
+            .await
     }
 
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {

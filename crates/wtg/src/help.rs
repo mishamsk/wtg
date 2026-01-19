@@ -14,11 +14,13 @@ pub fn display_help() {
 
 {usage_header}
   {cmd} {examples}
+  {cmd} {examples} {release_arg}
   {cmd} -r {repo_url} {examples_with_r}
 
 {options_header}
   {opt_r}              GitHub repository (e.g., owner/repo)
-  {opt_fetch}          Fetch missing refs from remote when not found locally
+  {opt_fetch}             Fetch missing refs from remote when not found locally
+  {opt_skip_pre}  Skip pre-release versions (nightlies, RCs, etc.)
 
 {what_header}
   {bullet} Throw anything at me: commits, issues, PRs, files, or tags
@@ -32,6 +34,11 @@ pub fn display_help() {
   {cmd} 123                                  {dim2}# Look up issue or PR
   {cmd} Cargo.toml                           {dim2}# Check file history
   {cmd} v1.2.3                               {dim2}# Inspect a release tag
+
+  {dim}# Check specific release
+  {cmd} c62bbcc v2.0.0                       {dim2}# Is commit in v2.0.0?
+  {cmd} 123 v2.0.0                           {dim2}# Is PR/issue fix in v2.0.0?
+  {cmd} c62bbcc -S                           {dim2}# Skip pre-releases
 
   {dim}# Remote repository
   {cmd} -r owner/repo c62bbcc                {dim2}# Check commit in remote repo
@@ -50,10 +57,12 @@ pub fn display_help() {
         cmd = "wtg".cyan(),
         examples = "<COMMIT|ISSUE|FILE|TAG|URL>".yellow(),
         examples_with_r = "<COMMIT|ISSUE|FILE|TAG>".yellow(),
+        release_arg = "[RELEASE]".yellow(),
         repo_url = "<REPO_URL>".yellow(),
         options_header = "OPTIONS".cyan().bold(),
         opt_r = "-r, --repo".green(),
         opt_fetch = "    --fetch".green(),
+        opt_skip_pre = "-S, --skip-prereleases".green(),
         what_header = "WHAT I DO".cyan().bold(),
         bullet = "→",
         examples_header = "EXAMPLES".cyan().bold(),
