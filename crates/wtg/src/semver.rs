@@ -15,6 +15,36 @@ pub struct SemverInfo {
     pub build_metadata: Option<String>,
 }
 
+impl Ord for SemverInfo {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.major.cmp(&other.major) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        match self.minor.cmp(&other.minor) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        match self.patch.cmp(&other.patch) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        // Pre-release: None (stable) > Some (pre-release)
+        match (&self.pre_release, &other.pre_release) {
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(a), Some(b)) => a.cmp(b),
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for SemverInfo {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Regex for parsing semantic version tags.
 /// Supports:
 /// - Optional prefix: py-, rust-, python-, etc.

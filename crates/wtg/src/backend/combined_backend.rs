@@ -348,6 +348,11 @@ impl Backend for CombinedBackend {
         self.git.find_tag(name).await
     }
 
+    async fn find_previous_tag(&self, tag_name: &str) -> WtgResult<Option<TagInfo>> {
+        // Use git backend for local tag lookup (faster)
+        self.git.find_previous_tag(tag_name).await
+    }
+
     async fn find_release_for_commit(
         &self,
         commit_hash: &str,

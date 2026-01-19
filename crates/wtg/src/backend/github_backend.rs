@@ -178,6 +178,56 @@ impl Backend for GitHubBackend {
             .ok_or_else(|| WtgError::NotFound(format!("Tag {name}")))
     }
 
+    async fn find_previous_tag(&self, tag_name: &str) -> WtgResult<Option<TagInfo>> {
+        // Fetch the current tag first
+        let current = self.find_tag(tag_name).await?;
+
+        // For GitHub, we need to list releases/tags and find the previous one
+        // This is a simplified implementation - fetch recent releases
+        let since = current.created_at - chrono::Duration::days(365);
+        let releases = self
+            .client
+            .fetch_releases_since(&self.gh_repo_info, since)
+            .await;
+
+        if current.is_semver() {
+            // Find previous by semver
+            let mut semver_releases: Vec<_> = releases
+                .iter()
+                .filter(|r| crate::git::parse_semver(&r.tag_name).is_some())
+                .collect();
+
+            semver_releases.sort_by(|a, b| {
+                let a_semver = crate::git::parse_semver(&a.tag_name).unwrap();
+                let b_semver = crate::git::parse_semver(&b.tag_name).unwrap();
+                a_semver.cmp(&b_semver)
+            });
+
+            if let Some(pos) = semver_releases.iter().position(|r| r.tag_name == tag_name)
+                && pos > 0
+            {
+                let prev = &semver_releases[pos - 1];
+                return self.find_tag(&prev.tag_name).await.map(Some);
+            }
+            return Ok(None);
+        }
+
+        // Non-semver: find by date
+        let mut candidates: Vec<_> = releases
+            .iter()
+            .filter(|r| r.tag_name != tag_name)
+            .filter(|r| r.created_at.is_some_and(|d| d < current.created_at))
+            .collect();
+
+        candidates.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        if let Some(prev) = candidates.first() {
+            return self.find_tag(&prev.tag_name).await.map(Some);
+        }
+
+        Ok(None)
+    }
+
     async fn find_release_for_commit(
         &self,
         commit_hash: &str,

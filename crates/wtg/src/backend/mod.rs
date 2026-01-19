@@ -84,6 +84,14 @@ pub trait Backend: Send + Sync {
         Err(WtgError::Unsupported("tag lookup".into()))
     }
 
+    /// Find the previous tag before the given tag.
+    ///
+    /// For semver tags, returns the immediately preceding version by semver ordering.
+    /// For non-semver tags, returns the most recent tag pointing to an earlier commit.
+    async fn find_previous_tag(&self, _tag_name: &str) -> WtgResult<Option<TagInfo>> {
+        Err(WtgError::Unsupported("find previous tag".into()))
+    }
+
     /// Disambiguate a parsed query into a concrete query.
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
