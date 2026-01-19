@@ -21,10 +21,12 @@ impl ReleaseFilter {
     /// Filter a list of `TagInfo` candidates.
     ///
     /// Returns a new vector containing only tags that pass the filter.
-    pub fn filter_tags<'a>(&self, tags: impl Iterator<Item = &'a TagInfo>) -> Vec<&'a TagInfo> {
+    #[must_use]
+    pub fn filter_tags(&self, tags: Vec<TagInfo>) -> Vec<TagInfo> {
         match self {
-            Self::Unrestricted => tags.collect(),
+            Self::Unrestricted => tags,
             Self::SkipPrereleases => tags
+                .into_iter()
                 .filter(|t| {
                     // Keep tags that are not semver (can't determine pre-release status)
                     // or are semver but not pre-releases
@@ -33,7 +35,7 @@ impl ReleaseFilter {
                         .is_none_or(|s| s.pre_release.is_none())
                 })
                 .collect(),
-            Self::Specific(name) => tags.filter(|t| t.name == *name).collect(),
+            Self::Specific(name) => tags.into_iter().filter(|t| t.name == *name).collect(),
         }
     }
 
@@ -74,27 +76,27 @@ mod tests {
 
     #[test]
     fn unrestricted_keeps_all_tags() {
-        let tags = [
+        let tags = vec![
             make_tag("v1.0.0"),
             make_tag("v1.1.0-beta.1"),
             make_tag("v2.0.0-rc.1"),
             make_tag("release-2024"),
         ];
         let filter = ReleaseFilter::Unrestricted;
-        let result = filter.filter_tags(tags.iter());
+        let result = filter.filter_tags(tags);
         assert_eq!(result.len(), 4);
     }
 
     #[test]
     fn skip_prereleases_filters_correctly() {
-        let tags = [
+        let tags = vec![
             make_tag("v1.0.0"),
             make_tag("v1.1.0-beta.1"),
             make_tag("v2.0.0-rc.1"),
             make_tag("release-2024"), // non-semver, kept
         ];
         let filter = ReleaseFilter::SkipPrereleases;
-        let result = filter.filter_tags(tags.iter());
+        let result = filter.filter_tags(tags);
         assert_eq!(result.len(), 2);
         assert!(result.iter().any(|t| t.name == "v1.0.0"));
         assert!(result.iter().any(|t| t.name == "release-2024"));
@@ -102,18 +104,18 @@ mod tests {
 
     #[test]
     fn specific_filters_to_one_tag() {
-        let tags = [make_tag("v1.0.0"), make_tag("v1.1.0"), make_tag("v2.0.0")];
+        let tags = vec![make_tag("v1.0.0"), make_tag("v1.1.0"), make_tag("v2.0.0")];
         let filter = ReleaseFilter::Specific("v1.1.0".to_string());
-        let result = filter.filter_tags(tags.iter());
+        let result = filter.filter_tags(tags);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "v1.1.0");
     }
 
     #[test]
     fn specific_returns_empty_if_not_found() {
-        let tags = [make_tag("v1.0.0"), make_tag("v2.0.0")];
+        let tags = vec![make_tag("v1.0.0"), make_tag("v2.0.0")];
         let filter = ReleaseFilter::Specific("v99.0.0".to_string());
-        let result = filter.filter_tags(tags.iter());
+        let result = filter.filter_tags(tags);
         assert!(result.is_empty());
     }
 

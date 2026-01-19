@@ -95,15 +95,6 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
         ReleaseFilter::Unrestricted
     };
 
-    // Early validation: if user specified a tag, verify it exists BEFORE doing any work
-    if let Some(tag_name) = filter.specific_tag()
-        && backend.find_tag(tag_name).await.is_err()
-    {
-        return Err(WtgError::NotFound(format!(
-            "Tag '{tag_name}'? Never heard of it. Check your spelling!"
-        )));
-    }
-
     // Resolve the query using the backend
     log::debug!("Disambiguating query: {:?}", parsed_input.query());
     let query = backend.disambiguate_query(parsed_input.query()).await?;

@@ -75,27 +75,13 @@ impl GitHubBackend {
             // Fetch the specific tag
             let tag = self.client.fetch_tag(&self.gh_repo_info, tag_name).await?;
 
-            // Check if commit is in this tag using the compare API
-            if let Some(tag_info) = self
+            // Check if commit is contained in this tag
+            if self
                 .client
-                .fetch_tag_info_for_release(
-                    &crate::github::ReleaseInfo {
-                        tag_name: tag.name.clone(),
-                        name: tag.release_name.clone(),
-                        url: tag.release_url.clone().unwrap_or_default(),
-                        prerelease: tag
-                            .semver_info
-                            .as_ref()
-                            .is_some_and(|s| s.pre_release.is_some()),
-                        published_at: tag.published_at,
-                        created_at: Some(tag.created_at),
-                    },
-                    &self.gh_repo_info,
-                    commit_hash,
-                )
+                .tag_contains_commit(&self.gh_repo_info, tag_name, commit_hash)
                 .await
             {
-                return Some(tag_info);
+                return Some(tag);
             }
             return None;
         }

@@ -67,11 +67,7 @@ impl GitBackend {
         }
 
         // Apply filter to candidates
-        let filtered: Vec<TagInfo> = filter
-            .filter_tags(candidates.iter())
-            .into_iter()
-            .cloned()
-            .collect();
+        let filtered = filter.filter_tags(candidates);
 
         if filtered.is_empty() {
             return None;

@@ -10,6 +10,7 @@ pub enum WtgError {
     EmptyInput,
     NotInGitRepo,
     NotFound(String),
+    TagNotFound(String),
     Unsupported(String),
     Git(git2::Error),
     GhConnectionLost,
@@ -54,6 +55,22 @@ impl fmt::Display for WtgError {
                 writeln!(f, "   {} Git tag", "❌".red())?;
                 writeln!(f)?;
                 writeln!(f, "   {}: {}", "Input was".yellow(), input.as_str().cyan())
+            }
+            Self::TagNotFound(tag_name) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🏷️  Tag not found! Never heard of it.".yellow().bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}: {}",
+                    "Looking for".yellow(),
+                    tag_name.as_str().cyan()
+                )?;
+                writeln!(f)?;
+                writeln!(f, "   {}", "Check your spelling! 🔍".yellow())
             }
             Self::Unsupported(operation) => {
                 writeln!(f, "{}", "🚫 Can't do that here!".yellow().bold())?;

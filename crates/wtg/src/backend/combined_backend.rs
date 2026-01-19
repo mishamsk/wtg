@@ -105,11 +105,7 @@ impl CombinedBackend {
         let candidates = repo.tags_containing_commit(commit_hash);
 
         // Apply filter to candidates
-        let filtered_candidates: Vec<TagInfo> = filter
-            .filter_tags(candidates.iter())
-            .into_iter()
-            .cloned()
-            .collect();
+        let filtered_candidates = filter.filter_tags(candidates);
 
         let has_semver = filtered_candidates.iter().any(TagInfo::is_semver);
 
@@ -169,7 +165,9 @@ impl CombinedBackend {
             let mut api_candidates: Vec<TagInfo> = Vec::new();
 
             for release in releases {
-                // Skip pre-releases if filter is active
+                // Early filter: skip prereleases BEFORE making expensive API calls.
+                // This is intentionally separate from filter_tags() which operates on
+                // already-fetched TagInfo objects.
                 if skip_prereleases && release.prerelease {
                     continue;
                 }

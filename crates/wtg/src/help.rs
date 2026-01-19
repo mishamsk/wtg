@@ -18,8 +18,8 @@ pub fn display_help() {
   {cmd} -r {repo_url} {examples_with_r}
 
 {options_header}
-  {opt_r}                   GitHub repository (e.g., owner/repo)
-  {opt_fetch}               Fetch missing refs from remote when not found locally
+  {opt_r}       GitHub repository (e.g., owner/repo)
+  {opt_fetch}             Fetch missing refs from remote when not found locally
   {opt_skip_pre}  Skip pre-release versions (nightlies, RCs, etc.)
 
 {what_header}

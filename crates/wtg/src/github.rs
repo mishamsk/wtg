@@ -689,6 +689,38 @@ impl GitHubClient {
         })
     }
 
+    /// Check if a tag contains a specific commit using the GitHub compare API.
+    ///
+    /// Returns true if the commit is in the tag's history (status is "behind" or "identical").
+    pub async fn tag_contains_commit(
+        &self,
+        repo_info: &GhRepoInfo,
+        tag: &str,
+        commit: &str,
+    ) -> bool {
+        let compare = self
+            .call_client_api_with_fallback(move |client| {
+                let tag = tag.to_string();
+                let commit = commit.to_string();
+                let repo_info = repo_info.clone();
+                Box::pin(async move {
+                    client
+                        .commits(repo_info.owner(), repo_info.repo())
+                        .compare(&tag, &commit)
+                        .per_page(1)
+                        .send()
+                        .await
+                })
+            })
+            .await
+            .ok();
+
+        matches!(
+            compare.map(|c| c.status),
+            Some(GithubCommitStatus::Behind | GithubCommitStatus::Identical)
+        )
+    }
+
     /// Fetch tag info by name.
     /// Uses the commits API (which accepts refs) to resolve the tag to a commit,
     /// then optionally enriches with release info if available.

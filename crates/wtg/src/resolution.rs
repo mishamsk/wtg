@@ -98,6 +98,13 @@ pub async fn resolve(
     query: &Query,
     filter: &ReleaseFilter,
 ) -> WtgResult<IdentifiedThing> {
+    // Validate specific tag exists before doing any work
+    if let Some(tag_name) = filter.specific_tag()
+        && backend.find_tag(tag_name).await.is_err()
+    {
+        return Err(WtgError::TagNotFound(tag_name.to_string()));
+    }
+
     match query {
         Query::GitCommit(hash) => resolve_commit(backend, hash, filter).await,
         Query::Pr(number) => resolve_pr(backend, *number, filter).await,
