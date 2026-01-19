@@ -694,20 +694,26 @@ pub fn print_notice(notice: Notice) {
             if authenticated {
                 eprintln!(
                     "{}",
-                    "⏱️  GitHub API rate limit hit (authenticated)."
+                    "🐌 Whoa there, speedster! GitHub says slow down..."
+                        .yellow()
+                        .italic()
+                );
+                eprintln!(
+                    "{}",
+                    "   (Even with a token, there are limits. Take a breather!)"
                         .yellow()
                         .italic()
                 );
             } else {
                 eprintln!(
                     "{}",
-                    "⏱️  GitHub API rate limit hit (anonymous - 60 req/hr limit)."
+                    "🐌 GitHub's giving us the silent treatment (60 req/hr for strangers)..."
                         .yellow()
                         .italic()
                 );
                 eprintln!(
                     "{}",
-                    "   Set GITHUB_TOKEN for higher limits (5000 req/hr)."
+                    "   (Set GITHUB_TOKEN and they'll be way more chatty - 5000 req/hr!)"
                         .yellow()
                         .italic()
                 );
