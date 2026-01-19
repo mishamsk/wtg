@@ -5,6 +5,7 @@
 //! the types for representing resolved information.
 
 use crate::backend::Backend;
+use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
@@ -318,8 +319,6 @@ async fn select_best_changes(
     usize,
     Vec<CommitInfo>,
 ) {
-    use crate::changelog;
-
     // Compare release body and changelog, pick the more substantial one
     let release_len = release_body.map_or(0, |s| s.trim().len());
     let changelog_len = changelog_content.map_or(0, |s| s.trim().len());
@@ -369,8 +368,6 @@ async fn select_best_changes(
 
 /// Resolve a tag name to `IdentifiedThing`.
 async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedThing> {
-    use crate::changelog;
-
     let tag = backend.find_tag(name).await?;
 
     // Try to get changelog section
