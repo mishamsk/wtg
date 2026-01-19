@@ -1,6 +1,10 @@
 //! CHANGELOG.md parsing for Keep a Changelog format.
 //!
-//! Supports strict Keep a Changelog format with `## [version]` headers.
+//! Supports Keep a Changelog format with version headers at either level 2 (`##`)
+//! or level 3 (`###`). The header level is auto-detected from the content - once
+//! a version header is found at a specific level, that level is used consistently
+//! for section boundaries.
+//!
 //! See <https://keepachangelog.com> for format specification.
 
 use std::fs;
@@ -9,10 +13,15 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-/// Regex for parsing Keep a Changelog headers: `## [version]` or `## [vVersion]`
-static HEADER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^## \[v?([^\]]+)\]").expect("Invalid changelog header regex")
-});
+/// Regex for parsing version headers at level 2: `## [version]` or `## [version - date]`
+/// Captures everything inside brackets; date part is stripped in code if present.
+static HEADER_REGEX_L2: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^## \[([^\]]+)\]").expect("Invalid changelog header regex"));
+
+/// Regex for parsing version headers at level 3: `### [version]` or `### [version - date]`
+/// Captures everything inside brackets; date part is stripped in code if present.
+static HEADER_REGEX_L3: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^### \[([^\]]+)\]").expect("Invalid changelog header regex"));
 
 /// Maximum number of lines to include in changelog output before truncation.
 pub const MAX_LINES: usize = 20;
@@ -51,24 +60,47 @@ fn find_changelog_file(repo_root: &Path) -> Option<std::path::PathBuf> {
 
 /// Extract a version section from changelog content.
 ///
-/// Matches Keep a Changelog format: `## [version]` or `## [version] - date`
+/// Matches changelog formats with version headers at either `##` or `###` level.
+/// The header level is auto-detected: tries `##` first, then `###` if no matches found.
 /// Version matching is flexible: strips 'v' prefix from both sides for comparison.
 #[must_use]
 pub fn extract_version_section(content: &str, version: &str) -> Option<String> {
+    // Try level 2 headers first (## [version])
+    if let Some(result) = extract_version_section_with_regex(content, version, &HEADER_REGEX_L2) {
+        return Some(result);
+    }
+
+    // Fall back to level 3 headers (### [version])
+    extract_version_section_with_regex(content, version, &HEADER_REGEX_L3)
+}
+
+/// Extract a version section using a specific header regex.
+fn extract_version_section_with_regex(
+    content: &str,
+    version: &str,
+    header_regex: &Regex,
+) -> Option<String> {
     // Normalize version by stripping 'v' prefix
     let normalized_version = version.strip_prefix('v').unwrap_or(version);
 
     let mut section_start: Option<usize> = None;
     let mut section_end: Option<usize> = None;
 
-    for caps in HEADER_REGEX.captures_iter(content) {
+    for caps in header_regex.captures_iter(content) {
         let full_match = caps.get(0)?;
         let captured_version = caps.get(1)?.as_str();
 
-        // Normalize captured version too
+        // Normalize captured version:
+        // - Strip 'v' prefix
+        // - Strip date suffix (` - 2024-01-15` style)
         let normalized_captured = captured_version
             .strip_prefix('v')
             .unwrap_or(captured_version);
+        let normalized_captured = normalized_captured
+            .split(" - ")
+            .next()
+            .unwrap_or(normalized_captured)
+            .trim();
 
         if section_start.is_some() {
             // We found the next section header, mark end
@@ -207,6 +239,49 @@ All notable changes to this project will be documented in this file.
 ";
         let result = extract_version_section(changelog, "1.0.0");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn extracts_version_from_level3_headers() {
+        // Faker-style changelog with ### for versions
+        let changelog = r"## Changelog
+
+### [v40.1.2 - 2026-01-13](https://github.com/joke2k/faker/compare/v40.1.1...v40.1.2)
+
+* Make `tzdata` conditionally required based on platform. Thanks @rodrigobnogueira.
+
+### [v40.1.1 - 2026-01-10](https://github.com/joke2k/faker/compare/v40.1.0...v40.1.1)
+
+* Fix something else
+";
+        let result = extract_version_section(changelog, "v40.1.2");
+        assert!(result.is_some());
+        let content = result.unwrap();
+        assert!(content.contains("tzdata"));
+        assert!(!content.contains("Fix something else"));
+    }
+
+    #[test]
+    fn extracts_version_from_level3_headers_without_v_prefix() {
+        let changelog = r"## Changelog
+
+### [40.1.2 - 2026-01-13]
+
+* Feature A
+
+### [40.1.1 - 2026-01-10]
+
+* Feature B
+";
+        // Search with v prefix, should still find version without v
+        let result = extract_version_section(changelog, "v40.1.2");
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Feature A"));
+
+        // Search without v prefix
+        let result2 = extract_version_section(changelog, "40.1.2");
+        assert!(result2.is_some());
+        assert!(result2.unwrap().contains("Feature A"));
     }
 
     #[test]
