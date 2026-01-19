@@ -200,6 +200,7 @@ impl TryFrom<octocrab::models::issues::Issue> for ExtendedIssueInfo {
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub name: Option<String>,
+    pub body: Option<String>,
     pub url: String,
     pub published_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
@@ -563,6 +564,7 @@ impl GitHubClient {
                 releases.push(ReleaseInfo {
                     tag_name: release.tag_name,
                     name: release.name,
+                    body: release.body,
                     url: release.html_url.to_string(),
                     published_at: release.published_at,
                     created_at: release.created_at,
@@ -626,6 +628,7 @@ impl GitHubClient {
         Some(ReleaseInfo {
             tag_name: release.tag_name,
             name: release.name,
+            body: release.body,
             url: release.html_url.to_string(),
             published_at: release.published_at,
             created_at: release.created_at,
