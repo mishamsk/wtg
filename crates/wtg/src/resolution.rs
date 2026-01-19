@@ -78,11 +78,37 @@ pub struct FileResult {
     pub release: Option<TagInfo>,
 }
 
+/// Source of changes information for a tag
+#[derive(Debug, Clone)]
+pub enum ChangesSource {
+    /// From GitHub release description
+    GitHubRelease,
+    /// From CHANGELOG.md
+    Changelog,
+    /// From commits since previous tag
+    Commits { previous_tag: String },
+}
+
+/// Enriched tag result with changes information
+#[derive(Debug, Clone)]
+pub struct TagResult {
+    pub tag_info: TagInfo,
+    pub github_url: Option<String>,
+    /// Changes content (release notes, changelog section, or commit list)
+    pub changes: Option<String>,
+    /// Where the changes came from
+    pub changes_source: Option<ChangesSource>,
+    /// Number of lines truncated (0 if not truncated)
+    pub truncated_lines: usize,
+    /// Commits between this tag and previous (when source is Commits)
+    pub commits: Vec<CommitInfo>,
+}
+
 #[derive(Debug, Clone)]
 pub enum IdentifiedThing {
     Enriched(Box<EnrichedInfo>),
     File(Box<FileResult>),
-    TagOnly(Box<TagInfo>, Option<String>), // Just a tag, no commit yet
+    Tag(Box<TagResult>),
 }
 
 // ============================================
