@@ -27,7 +27,8 @@ uvx --from wtg-cli wtg https://github.com/go-task/task/issues/1322
 - 🔗 **GitHub URL Parsing**: Paste any GitHub URL (commit, issue, PR, file) and wtg figures it out
 - 🎨 **Colorful Output**: Beautiful terminal output with emojis and colors
 - 😄 **Snarky Messages**: Helpful error messages with personality
-- 📦 **Release Tracking**: Finds which release first shipped your commit
+- 📦 **Release Tracking**: Finds which release first shipped your commit, with optional pre-release filtering
+- 🎯 **Release Checking**: Verify if a commit/issue/PR is in a specific release
 - 👤 **Blame Info**: Shows who's responsible for that pesky bug
 - 🚀 **Smart Caching**: Efficiently caches remote repositories with minimal disk usage
 - 🌐 **Graceful Degradation**: Works without network or GitHub remote
@@ -74,6 +75,15 @@ wtg Cargo.toml
 
 # Find a tag
 wtg v1.2.3
+
+# Check if a commit is in a specific release
+wtg c62bbcc v2.0.0
+
+# Skip pre-releases when finding the first release
+wtg c62bbcc -S
+
+# Fetch latest tags from remote before querying
+wtg c62bbcc --fetch
 ```
 
 ### Remote Repository
