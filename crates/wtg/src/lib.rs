@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::backend::resolve_backend_with_notices;
 use crate::cli::Cli;
 use crate::error::{WtgError, WtgResult};
+use crate::release_filter::ReleaseFilter;
 use crate::resolution::resolve;
 
 pub mod backend;
@@ -19,6 +20,7 @@ pub mod help;
 pub mod notice;
 pub mod output;
 pub mod parse_input;
+pub mod release_filter;
 pub mod remote;
 pub mod resolution;
 pub mod semver;
@@ -84,17 +86,35 @@ async fn run_async(cli: Cli) -> WtgResult<()> {
     let backend = resolve_backend_with_notices(&parsed_input, cli.fetch, notice_cb)?;
     log::debug!("Backend resolved");
 
+    // Build the release filter from CLI args
+    let filter = if let Some(ref release) = cli.release {
+        ReleaseFilter::Specific(release.clone())
+    } else if cli.skip_prereleases {
+        ReleaseFilter::SkipPrereleases
+    } else {
+        ReleaseFilter::Unrestricted
+    };
+
+    // Early validation: if user specified a tag, verify it exists BEFORE doing any work
+    if let Some(tag_name) = filter.specific_tag()
+        && backend.find_tag(tag_name).await.is_err()
+    {
+        return Err(WtgError::NotFound(format!(
+            "Tag '{tag_name}'? Never heard of it. Check your spelling!"
+        )));
+    }
+
     // Resolve the query using the backend
     log::debug!("Disambiguating query: {:?}", parsed_input.query());
     let query = backend.disambiguate_query(parsed_input.query()).await?;
     log::debug!("Disambiguated to: {query:?}");
 
     log::debug!("Resolving query");
-    let result = resolve(backend.as_ref(), &query).await?;
+    let result = resolve(backend.as_ref(), &query, &filter).await?;
     log::debug!("Resolution complete");
 
     // Display the result
-    output::display(result)?;
+    output::display(result, &filter)?;
 
     Ok(())
 }

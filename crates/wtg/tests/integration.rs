@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use wtg_cli::backend::resolve_backend;
 use wtg_cli::parse_input::{ParsedInput, ParsedQuery, Query};
+use wtg_cli::release_filter::ReleaseFilter;
 use wtg_cli::resolution::IdentifiedThing;
 use wtg_cli::resolution::resolve;
 
@@ -23,7 +24,7 @@ async fn integration_identify_recent_commit() {
         .await
         .expect("Failed to disambiguate commit");
 
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify commit");
 
@@ -44,7 +45,7 @@ async fn integration_identify_tag() {
         .await
         .expect("Failed to disambiguate tag");
 
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify tag");
 
@@ -66,7 +67,7 @@ async fn integration_identify_file() {
         .await
         .expect("Failed to disambiguate file");
 
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify LICENSE");
 
@@ -125,7 +126,7 @@ async fn integration_identify_zed_issue_41633() {
         .expect("Failed to disambiguate query");
 
     // Step 4: Resolve (same as CLI)
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to resolve");
 
@@ -189,7 +190,7 @@ async fn integration_identify_go_task_issue_1322() {
         .expect("Failed to disambiguate query");
 
     // Step 4: Resolve (same as CLI)
-    let result = resolve(backend.as_ref(), &query)
+    let result = resolve(backend.as_ref(), &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to resolve");
 

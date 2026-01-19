@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 - Add opt-in debug logging via `log` crate.
 - `Notice::GhRateLimitHit` to surface rate limit errors to users with actionable guidance.
+- `-S, --skip-prereleases` flag to filter pre-release versions when finding releases.
+- Second positional argument to check if a query result is in a specific release (e.g., `wtg abc123 v2.0.0`).
 
 ### Changed
 -

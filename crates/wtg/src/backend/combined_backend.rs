@@ -18,6 +18,7 @@ use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
 use crate::notice::{Notice, NoticeCallback, no_notices};
 use crate::parse_input::{ParsedQuery, Query};
+use crate::release_filter::ReleaseFilter;
 
 /// Combined backend using both local git and GitHub API.
 ///
@@ -62,24 +63,58 @@ impl CombinedBackend {
     ///
     /// Strategy:
     /// 1. Get local tag candidates containing the commit
-    /// 2. Enrich candidates with GitHub release metadata
-    /// 3. Pick best tag (prefer semver releases)
-    /// 4. If no local candidates, fall back to GitHub API release search
+    /// 2. Apply filter to candidates
+    /// 3. Enrich candidates with GitHub release metadata
+    /// 4. Pick best tag (prefer semver releases)
+    /// 5. If no local candidates, fall back to GitHub API release search
+    #[allow(clippy::too_many_lines)]
     async fn find_release_combined(
         &self,
         commit_hash: &str,
         commit_date: Option<DateTime<Utc>>,
+        filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
         let repo = self.git.git_repo();
         let gh_repo_info = self.github.repo_info();
         let client = self.github.client();
 
+        // Fast path for specific tag lookup
+        if let Some(tag_name) = filter.specific_tag() {
+            // Try local tag first
+            if let Some(tag) = repo.get_tags().into_iter().find(|t| t.name == tag_name)
+                && repo.tag_contains_commit(&tag.commit_hash, commit_hash)
+            {
+                // Enrich with release info if available
+                let mut result = tag;
+                if let Some(release) = client.fetch_release_by_tag(gh_repo_info, tag_name).await {
+                    result.is_release = true;
+                    result.release_name.clone_from(&release.name);
+                    result.release_url = Some(release.url);
+                    result.published_at = release.published_at;
+                }
+                return Some(result);
+            }
+            // Fall back to API for specific tag check
+            return self
+                .github
+                .find_release_for_commit(commit_hash, commit_date, filter)
+                .await;
+        }
+
         // Get local tag candidates (ensure_tags is called internally)
         let candidates = repo.tags_containing_commit(commit_hash);
-        let has_semver = candidates.iter().any(TagInfo::is_semver);
+
+        // Apply filter to candidates
+        let filtered_candidates: Vec<TagInfo> = filter
+            .filter_tags(candidates.iter())
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let has_semver = filtered_candidates.iter().any(TagInfo::is_semver);
 
         // Build timestamp map for sorting
-        let timestamps: HashMap<String, i64> = candidates
+        let timestamps: HashMap<String, i64> = filtered_candidates
             .iter()
             .map(|tag| {
                 (
@@ -90,16 +125,16 @@ impl CombinedBackend {
             .collect();
 
         // Enrich candidates with release metadata from GitHub
-        let mut enriched_candidates = candidates.clone();
-        if !candidates.is_empty() {
+        let mut enriched_candidates = filtered_candidates.clone();
+        if !filtered_candidates.is_empty() {
             let target_names: Vec<_> = if has_semver {
-                candidates
+                filtered_candidates
                     .iter()
                     .filter(|c| c.is_semver())
                     .map(|c| c.name.clone())
                     .collect()
             } else {
-                candidates.iter().map(|c| c.name.clone()).collect()
+                filtered_candidates.iter().map(|c| c.name.clone()).collect()
             };
 
             for tag_name in &target_names {
@@ -126,13 +161,19 @@ impl CombinedBackend {
         }
 
         // Otherwise, try fetching releases from API as fallback
-        if candidates.is_empty()
+        let skip_prereleases = filter.skips_prereleases();
+        if filtered_candidates.is_empty()
             && let Some(since) = commit_date
         {
             let releases = client.fetch_releases_since(gh_repo_info, since).await;
             let mut api_candidates: Vec<TagInfo> = Vec::new();
 
             for release in releases {
+                // Skip pre-releases if filter is active
+                if skip_prereleases && release.prerelease {
+                    continue;
+                }
+
                 // Try local tag first
                 if let Some(mut tag) = repo.tag_from_release(&release)
                     && repo.tag_contains_commit(&tag.commit_hash, commit_hash)
@@ -313,8 +354,10 @@ impl Backend for CombinedBackend {
         &self,
         commit_hash: &str,
         commit_date: Option<DateTime<Utc>>,
+        filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
-        self.find_release_combined(commit_hash, commit_date).await
+        self.find_release_combined(commit_hash, commit_date, filter)
+            .await
     }
 
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {

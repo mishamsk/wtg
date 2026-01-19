@@ -5,6 +5,7 @@ use rstest::rstest;
 use std::path::{Path, PathBuf};
 use wtg_cli::backend::{Backend, GitBackend};
 use wtg_cli::parse_input::{ParsedQuery, Query};
+use wtg_cli::release_filter::ReleaseFilter;
 use wtg_cli::resolution::resolve;
 use wtg_cli::resolution::{EntryPoint, IdentifiedThing};
 
@@ -16,7 +17,7 @@ async fn test_identify_commit_by_hash(test_repo: TestRepoFixture) {
     let backend = GitBackend::new(test_repo.repo);
     let query = Query::GitCommit(commit_hash.clone());
 
-    let result = resolve(&backend, &query)
+    let result = resolve(&backend, &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify commit");
 
@@ -57,7 +58,7 @@ async fn test_identify_commit_by_short_hash(test_repo: TestRepoFixture) {
     let backend = GitBackend::new(test_repo.repo);
     let query = Query::GitCommit(short_hash.to_string());
 
-    let result = resolve(&backend, &query)
+    let result = resolve(&backend, &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify commit");
 
@@ -91,7 +92,7 @@ async fn test_identify_file(test_repo: TestRepoFixture) {
         path: PathBuf::from("test.txt"),
     };
 
-    let result = resolve(&backend, &query)
+    let result = resolve(&backend, &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify file");
 
@@ -132,7 +133,7 @@ async fn test_identify_tag(test_repo: TestRepoFixture) {
         .await
         .expect("Failed to disambiguate tag");
 
-    let result = resolve(&backend, &query)
+    let result = resolve(&backend, &query, &ReleaseFilter::Unrestricted)
         .await
         .expect("Failed to identify tag");
 

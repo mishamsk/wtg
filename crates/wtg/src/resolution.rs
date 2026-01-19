@@ -9,6 +9,7 @@ use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
 use crate::parse_input::Query;
+use crate::release_filter::ReleaseFilter;
 
 // ============================================
 // Result types
@@ -89,34 +90,45 @@ pub enum IdentifiedThing {
 // ============================================
 
 /// Resolve a query to identified information using the provided backend.
-pub async fn resolve(backend: &dyn Backend, query: &Query) -> WtgResult<IdentifiedThing> {
+///
+/// The `filter` parameter controls which releases are considered when finding
+/// the release that contains a commit.
+pub async fn resolve(
+    backend: &dyn Backend,
+    query: &Query,
+    filter: &ReleaseFilter,
+) -> WtgResult<IdentifiedThing> {
     match query {
-        Query::GitCommit(hash) => resolve_commit(backend, hash).await,
-        Query::Pr(number) => resolve_pr(backend, *number).await,
-        Query::Issue(number) => resolve_issue(backend, *number).await,
+        Query::GitCommit(hash) => resolve_commit(backend, hash, filter).await,
+        Query::Pr(number) => resolve_pr(backend, *number, filter).await,
+        Query::Issue(number) => resolve_issue(backend, *number, filter).await,
         Query::IssueOrPr(number) => {
             // Try PR first, then issue
-            if let Ok(result) = resolve_pr(backend, *number).await {
+            if let Ok(result) = resolve_pr(backend, *number, filter).await {
                 return Ok(result);
             }
-            if let Ok(result) = resolve_issue(backend, *number).await {
+            if let Ok(result) = resolve_issue(backend, *number, filter).await {
                 return Ok(result);
             }
             Err(WtgError::NotFound(format!("#{number}")))
         }
         Query::FilePath { branch, path } => {
-            resolve_file(backend, branch, &path.to_string_lossy()).await
+            resolve_file(backend, branch, &path.to_string_lossy(), filter).await
         }
         Query::Tag(tag) => resolve_tag(backend, tag).await,
     }
 }
 
 /// Resolve a commit hash to `IdentifiedThing`.
-async fn resolve_commit(backend: &dyn Backend, hash: &str) -> WtgResult<IdentifiedThing> {
+async fn resolve_commit(
+    backend: &dyn Backend,
+    hash: &str,
+    filter: &ReleaseFilter,
+) -> WtgResult<IdentifiedThing> {
     let commit = backend.find_commit(hash).await?;
     let commit = backend.enrich_commit(commit).await;
     let release = backend
-        .find_release_for_commit(&commit.hash, Some(commit.date))
+        .find_release_for_commit(&commit.hash, Some(commit.date), filter)
         .await;
 
     Ok(IdentifiedThing::Enriched(Box::new(EnrichedInfo {
@@ -129,7 +141,11 @@ async fn resolve_commit(backend: &dyn Backend, hash: &str) -> WtgResult<Identifi
 }
 
 /// Resolve a PR number to `IdentifiedThing`.
-async fn resolve_pr(backend: &dyn Backend, number: u64) -> WtgResult<IdentifiedThing> {
+async fn resolve_pr(
+    backend: &dyn Backend,
+    number: u64,
+    filter: &ReleaseFilter,
+) -> WtgResult<IdentifiedThing> {
     let pr = backend.fetch_pr(number).await?;
 
     let commit = backend.find_commit_for_pr(&pr).await.ok();
@@ -139,7 +155,9 @@ async fn resolve_pr(backend: &dyn Backend, number: u64) -> WtgResult<IdentifiedT
     };
 
     let release = if let Some(ref c) = commit {
-        backend.find_release_for_commit(&c.hash, Some(c.date)).await
+        backend
+            .find_release_for_commit(&c.hash, Some(c.date), filter)
+            .await
     } else {
         None
     };
@@ -156,7 +174,11 @@ async fn resolve_pr(backend: &dyn Backend, number: u64) -> WtgResult<IdentifiedT
 /// Resolve an issue number to `IdentifiedThing`.
 ///
 /// Handles cross-project PRs by spawning a backend for the PR's repository.
-async fn resolve_issue(backend: &dyn Backend, number: u64) -> WtgResult<IdentifiedThing> {
+async fn resolve_issue(
+    backend: &dyn Backend,
+    number: u64,
+    filter: &ReleaseFilter,
+) -> WtgResult<IdentifiedThing> {
     let ext_issue = backend.fetch_issue(number).await?;
     let display_issue = (&ext_issue).into();
 
@@ -181,12 +203,16 @@ async fn resolve_issue(backend: &dyn Backend, number: u64) -> WtgResult<Identifi
                 let date = Some(c.date);
                 // Try issue's repo first, fall back to PR's repo for releases
                 if cross_backend.is_some() {
-                    match backend.find_release_for_commit(hash, date).await {
+                    match backend.find_release_for_commit(hash, date, filter).await {
                         Some(r) => Some(r),
-                        None => effective_backend.find_release_for_commit(hash, date).await,
+                        None => {
+                            effective_backend
+                                .find_release_for_commit(hash, date, filter)
+                                .await
+                        }
                     }
                 } else {
-                    backend.find_release_for_commit(hash, date).await
+                    backend.find_release_for_commit(hash, date, filter).await
                 }
             } else {
                 None
@@ -214,6 +240,7 @@ async fn resolve_file(
     backend: &dyn Backend,
     branch: &str,
     path: &str,
+    filter: &ReleaseFilter,
 ) -> WtgResult<IdentifiedThing> {
     let file_info = backend.find_file(branch, path).await?;
     let commit_url = backend.commit_url(&file_info.last_commit.hash);
@@ -229,6 +256,7 @@ async fn resolve_file(
         .find_release_for_commit(
             &file_info.last_commit.hash,
             Some(file_info.last_commit.date),
+            filter,
         )
         .await;
 
