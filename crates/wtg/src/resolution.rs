@@ -302,11 +302,6 @@ async fn resolve_file(
     })))
 }
 
-/// Get repository path from current directory.
-fn get_repo_path() -> Option<std::path::PathBuf> {
-    std::env::current_dir().ok()
-}
-
 /// Select the best changes source, falling back to commits if needed.
 async fn select_best_changes(
     backend: &dyn Backend,
@@ -370,9 +365,8 @@ async fn select_best_changes(
 async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedThing> {
     let tag = backend.find_tag(name).await?;
 
-    // Try to get changelog section
-    let changelog_content = get_repo_path()
-        .and_then(|repo_path| changelog::parse_changelog_for_version(&repo_path, name));
+    // Try to get changelog section via backend
+    let changelog_content = backend.changelog_for_version(name).await;
 
     // Try to get release body from GitHub
     let release_body = backend.fetch_release_body(name).await;
