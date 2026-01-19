@@ -689,6 +689,7 @@ impl GitHubClient {
             release_name: release.name.clone(),
             release_url: Some(release.url.clone()),
             published_at: release.published_at,
+            tag_url: Some(release.url.clone()),
         })
     }
 
@@ -736,6 +737,13 @@ impl GitHubClient {
 
         let semver_info = parse_semver(tag_name);
 
+        // Compute tag_url: release URL for releases, tree URL for plain tags
+        let tag_url = Some(
+            release
+                .as_ref()
+                .map_or_else(|| Self::tag_url(repo_info, tag_name), |r| r.url.clone()),
+        );
+
         Some(TagInfo {
             name: tag_name.to_string(),
             commit_hash: commit.hash,
@@ -745,6 +753,7 @@ impl GitHubClient {
             release_name: release.as_ref().and_then(|r| r.name.clone()),
             release_url: release.as_ref().map(|r| r.url.clone()),
             published_at: release.and_then(|r| r.published_at),
+            tag_url,
         })
     }
 

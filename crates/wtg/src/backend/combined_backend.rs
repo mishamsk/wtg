@@ -141,8 +141,9 @@ impl CombinedBackend {
                     {
                         candidate.is_release = true;
                         candidate.release_name.clone_from(&release.name);
-                        candidate.release_url = Some(release.url);
+                        candidate.release_url = Some(release.url.clone());
                         candidate.published_at = release.published_at;
+                        candidate.tag_url = Some(release.url);
                     }
                 }
             }

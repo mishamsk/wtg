@@ -79,6 +79,7 @@ pub struct TagInfo {
     pub release_name: Option<String>, // GitHub release name (if is_release)
     pub release_url: Option<String>, // GitHub release URL (if is_release)
     pub published_at: Option<DateTime<Utc>>, // GitHub release published date (if is_release)
+    pub tag_url: Option<String>, // URL to view the tag (tree for plain tags, release page for releases)
 }
 
 impl TagInfo {
@@ -543,6 +544,7 @@ impl GitRepo {
                             release_name: None,
                             release_url: None,
                             published_at: None,
+                            tag_url: None,
                         });
                     }
                 }
@@ -654,6 +656,7 @@ impl GitRepo {
                 release_url: Some(release.url.clone()),
                 published_at: release.published_at,
                 created_at: git_time_to_datetime(commit.time()),
+                tag_url: Some(release.url.clone()),
             })
         })
     }
@@ -711,6 +714,7 @@ impl GitRepo {
                             release_name: None,
                             release_url: None,
                             published_at: None,
+                            tag_url: None,
                         });
                     }
                 }

@@ -143,8 +143,8 @@ fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
 
             display_missing_info(&info);
 
-            if let Some(commit_info) = info.commit.as_ref() {
-                display_release_info(info.release, commit_info.commit_url.as_deref(), filter);
+            if info.commit.is_some() {
+                display_release_info(info.release, filter);
             }
         }
         EntryPoint::PullRequestNumber(_) => {
@@ -164,8 +164,8 @@ fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
 
             display_missing_info(&info);
 
-            if let Some(commit_info) = info.commit.as_ref() {
-                display_release_info(info.release, commit_info.commit_url.as_deref(), filter);
+            if info.commit.is_some() {
+                display_release_info(info.release, filter);
             }
         }
         _ => {
@@ -190,8 +190,8 @@ fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
 
             display_missing_info(&info);
 
-            if let Some(commit_info) = info.commit.as_ref() {
-                display_release_info(info.release, commit_info.commit_url.as_deref(), filter);
+            if info.commit.is_some() {
+                display_release_info(info.release, filter);
             }
         }
     }
@@ -536,7 +536,6 @@ fn display_file(file_result: FileResult, filter: &ReleaseFilter) {
 
 fn display_release_info(
     release: Option<TagInfo>,
-    commit_url: Option<&str>,
     filter: &ReleaseFilter,
 ) {
     // Special messaging when checking a specific release
@@ -553,15 +552,9 @@ fn display_release_info(
                 .green()
                 .bold()
             );
-            if tag.is_release {
-                if let Some(url) = &tag.release_url {
-                    print_link(url);
-                }
-            } else if let Some(url) = commit_url
-                && let Some((base_url, _)) = url.rsplit_once("/commit/")
-            {
-                let tag_url = format!("{base_url}/tree/{}", tag.name);
-                print_link(&tag_url);
+            // Use pre-computed tag_url (release URL for releases, tree URL for plain tags)
+            if let Some(url) = &tag.tag_url {
+                print_link(url);
             }
         } else {
             println!(
@@ -598,22 +591,14 @@ fn display_release_info(
 
                 let date_part = published_or_created.format("%Y-%m-%d").to_string();
                 println!("   {} {}", "📅".dark_grey(), date_part.dark_grey());
-
-                // Use the release URL if available
-                if let Some(url) = &tag.release_url {
-                    print_link(url);
-                }
             } else {
                 // Plain git tag
                 println!("   {} {}", "🏷️ ".yellow(), tag.name.as_str().cyan().bold());
+            }
 
-                // Build GitHub URLs if we have a commit URL
-                if let Some(url) = commit_url
-                    && let Some((base_url, _)) = url.rsplit_once("/commit/")
-                {
-                    let tag_url = format!("{base_url}/tree/{}", tag.name);
-                    print_link(&tag_url);
-                }
+            // Use pre-computed tag_url (release URL for releases, tree URL for plain tags)
+            if let Some(url) = &tag.tag_url {
+                print_link(url);
             }
         }
         None => {
