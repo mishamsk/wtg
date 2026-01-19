@@ -34,6 +34,10 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
+    // Initialize logging - respects RUST_LOG env var
+    // Uses try_init to avoid panic if called multiple times (e.g., in tests)
+    let _ = env_logger::try_init();
+
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(err) => {
@@ -69,17 +73,25 @@ fn run_with_cli(cli: Cli) -> WtgResult<()> {
 async fn run_async(cli: Cli) -> WtgResult<()> {
     // Parse the input to determine if it's a remote repo or local
     let parsed_input = cli.parse_input()?;
+    log::debug!("Parsed input: {parsed_input:?}");
 
     // Create notice callback - all notices (capability warnings and operational info)
     // are delivered via callback and printed by output::print_notice
     let notice_cb = Arc::new(output::print_notice);
 
     // Create the backend based on available resources
+    log::debug!("Resolving backend (fetch={})", cli.fetch);
     let backend = resolve_backend_with_notices(&parsed_input, cli.fetch, notice_cb)?;
+    log::debug!("Backend resolved");
 
     // Resolve the query using the backend
+    log::debug!("Disambiguating query: {:?}", parsed_input.query());
     let query = backend.disambiguate_query(parsed_input.query()).await?;
+    log::debug!("Disambiguated to: {query:?}");
+
+    log::debug!("Resolving query");
     let result = resolve(backend.as_ref(), &query).await?;
+    log::debug!("Resolution complete");
 
     // Display the result
     output::display(result)?;

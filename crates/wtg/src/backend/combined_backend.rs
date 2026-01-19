@@ -49,7 +49,8 @@ impl CombinedBackend {
     /// Set the notice callback for emitting operational messages.
     pub(crate) fn set_notice_callback(&mut self, cb: NoticeCallback) {
         self.notice_cb = cb.clone();
-        self.git.set_notice_callback(cb);
+        self.git.set_notice_callback(cb.clone());
+        self.github.set_notice_callback(cb);
     }
 
     /// Emit a notice via the callback.

@@ -12,6 +12,7 @@ use super::Backend;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, TagInfo, looks_like_commit_hash};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
+use crate::notice::NoticeCallback;
 use crate::parse_input::{ParsedQuery, Query};
 
 /// Pure GitHub API backend.
@@ -54,6 +55,11 @@ impl GitHubBackend {
     #[must_use]
     pub(crate) const fn repo_info(&self) -> &GhRepoInfo {
         &self.gh_repo_info
+    }
+
+    /// Set the notice callback for the underlying client.
+    pub(crate) fn set_notice_callback(&self, cb: NoticeCallback) {
+        self.client.set_notice_callback(cb);
     }
 
     /// Find release for a commit by iterating through releases.

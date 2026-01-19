@@ -55,6 +55,11 @@ pub enum Notice {
         repo: String,
         error: String,
     },
+    /// GitHub API rate limit was hit
+    GhRateLimitHit {
+        /// Whether the client was authenticated or anonymous
+        authenticated: bool,
+    },
 }
 
 /// Callback for emitting notices during operations.

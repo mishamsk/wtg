@@ -594,6 +594,7 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
 
 /// Print a notice to stderr.
 /// All notices (both capability warnings and operational info) go through this function.
+#[allow(clippy::too_many_lines)]
 pub fn print_notice(notice: Notice) {
     match notice {
         // --- Backend capability notices ---
@@ -688,6 +689,35 @@ pub fn print_notice(notice: Notice) {
             eprintln!(
                 "⚠️  Cannot access git for {owner}/{repo}: {error}. Using API only for cross-project refs."
             );
+        }
+        Notice::GhRateLimitHit { authenticated } => {
+            if authenticated {
+                eprintln!(
+                    "{}",
+                    "🐌 Whoa there, speedster! GitHub says slow down..."
+                        .yellow()
+                        .italic()
+                );
+                eprintln!(
+                    "{}",
+                    "   (Even with a token, there are limits. Take a breather!)"
+                        .yellow()
+                        .italic()
+                );
+            } else {
+                eprintln!(
+                    "{}",
+                    "🐌 GitHub's giving us the silent treatment (60 req/hr for strangers)..."
+                        .yellow()
+                        .italic()
+                );
+                eprintln!(
+                    "{}",
+                    "   (Set GITHUB_TOKEN and they'll be way more chatty - 5000 req/hr!)"
+                        .yellow()
+                        .italic()
+                );
+            }
         }
     }
 }
