@@ -378,8 +378,8 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
     let changelog_content = get_repo_path()
         .and_then(|repo_path| changelog::parse_changelog_for_version(&repo_path, name));
 
-    // For now, release_body is None - Task 9 will add fetch_release_body
-    let release_body: Option<String> = None;
+    // Try to get release body from GitHub
+    let release_body = backend.fetch_release_body(name).await;
 
     // Determine best source and get commits if needed
     let (changes, source, truncated, commits) = select_best_changes(

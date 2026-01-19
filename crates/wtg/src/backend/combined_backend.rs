@@ -380,6 +380,10 @@ impl Backend for CombinedBackend {
             .await
     }
 
+    async fn fetch_release_body(&self, tag_name: &str) -> Option<String> {
+        self.github.fetch_release_body(tag_name).await
+    }
+
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
             ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),

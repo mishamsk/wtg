@@ -250,6 +250,14 @@ impl Backend for GitHubBackend {
             .await
     }
 
+    async fn fetch_release_body(&self, tag_name: &str) -> Option<String> {
+        let release = self
+            .client
+            .fetch_release_by_tag(&self.gh_repo_info, tag_name)
+            .await?;
+        release.body.filter(|b| !b.trim().is_empty())
+    }
+
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
             ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),

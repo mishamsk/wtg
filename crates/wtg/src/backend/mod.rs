@@ -128,6 +128,11 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Fetch the body/description of a GitHub release by tag name.
+    async fn fetch_release_body(&self, _tag_name: &str) -> Option<String> {
+        None
+    }
+
     // ============================================
     // Issue operations (default: Unsupported)
     // ============================================
