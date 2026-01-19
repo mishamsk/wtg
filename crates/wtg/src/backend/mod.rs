@@ -160,8 +160,13 @@ pub trait Backend: Send + Sync {
         None
     }
 
-    /// Generate URL to view a tag.
+    /// Generate URL to view a tag (tree view for plain git tags).
     fn tag_url(&self, _tag: &str) -> Option<String> {
+        None
+    }
+
+    /// Generate URL to view a release (releases page for tags with releases).
+    fn release_tag_url(&self, _tag: &str) -> Option<String> {
         None
     }
 

@@ -762,13 +762,26 @@ impl GitHubClient {
         )
     }
 
-    /// Build a tag URL (fallback when API data unavailable)
-    /// Uses URL encoding to prevent injection
+    /// Build a tag URL pointing to the tree view (for plain git tags).
+    /// Uses URL encoding to prevent injection.
     #[must_use]
     pub fn tag_url(repo_info: &GhRepoInfo, tag: &str) -> String {
         use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/tree/{}",
+            utf8_percent_encode(repo_info.owner(), NON_ALPHANUMERIC),
+            utf8_percent_encode(repo_info.repo(), NON_ALPHANUMERIC),
+            utf8_percent_encode(tag, NON_ALPHANUMERIC)
+        )
+    }
+
+    /// Build a release URL pointing to the releases page (for tags with releases).
+    /// Uses URL encoding to prevent injection.
+    #[must_use]
+    pub fn release_tag_url(repo_info: &GhRepoInfo, tag: &str) -> String {
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+        format!(
+            "https://github.com/{}/{}/releases/tag/{}",
             utf8_percent_encode(repo_info.owner(), NON_ALPHANUMERIC),
             utf8_percent_encode(repo_info.repo(), NON_ALPHANUMERIC),
             utf8_percent_encode(tag, NON_ALPHANUMERIC)

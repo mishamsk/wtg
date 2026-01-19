@@ -283,6 +283,10 @@ impl Backend for GitHubBackend {
         Some(GitHubClient::tag_url(&self.gh_repo_info, tag))
     }
 
+    fn release_tag_url(&self, tag: &str) -> Option<String> {
+        Some(GitHubClient::release_tag_url(&self.gh_repo_info, tag))
+    }
+
     fn author_url_from_email(&self, email: &str) -> Option<String> {
         GitHubClient::author_url_from_email(email)
     }

@@ -372,7 +372,6 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
     use crate::changelog;
 
     let tag = backend.find_tag(name).await?;
-    let url = backend.tag_url(name);
 
     // Try to get changelog section
     let changelog_content = get_repo_path()
@@ -380,6 +379,17 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
 
     // Try to get release body from GitHub
     let release_body = backend.fetch_release_body(name).await;
+
+    // Determine if this is a release: either tag.is_release flag is set,
+    // or we successfully fetched a release body (which means the release exists)
+    let is_release = tag.is_release || release_body.is_some();
+
+    // Choose URL based on whether this is a release or plain tag
+    let url = if is_release {
+        backend.release_tag_url(name)
+    } else {
+        backend.tag_url(name)
+    };
 
     // Determine best source and get commits if needed
     let (changes, source, truncated, commits) = select_best_changes(

@@ -426,6 +426,10 @@ impl Backend for CombinedBackend {
         self.github.tag_url(tag)
     }
 
+    fn release_tag_url(&self, tag: &str) -> Option<String> {
+        self.github.release_tag_url(tag)
+    }
+
     fn author_url_from_email(&self, email: &str) -> Option<String> {
         self.github.author_url_from_email(email)
     }

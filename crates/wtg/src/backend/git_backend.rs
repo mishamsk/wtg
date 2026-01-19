@@ -292,6 +292,12 @@ impl Backend for GitBackend {
             .map(|ri| GitHubClient::tag_url(&ri, tag))
     }
 
+    fn release_tag_url(&self, tag: &str) -> Option<String> {
+        self.repo
+            .github_remote()
+            .map(|ri| GitHubClient::release_tag_url(&ri, tag))
+    }
+
     fn author_url_from_email(&self, email: &str) -> Option<String> {
         GitHubClient::author_url_from_email(email)
     }
