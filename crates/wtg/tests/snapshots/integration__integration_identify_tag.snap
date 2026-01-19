@@ -2,7 +2,7 @@
 source: crates/wtg/tests/integration.rs
 expression: snapshot
 ---
-result_type: tag_only
+result_type: tag
 entry_point: ~
 commit_message: ~
 commit_author: ~
