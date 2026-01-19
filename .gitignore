@@ -100,3 +100,6 @@ mise.local.toml
 CLAUDE.local.md
 .claude/
 .claude
+
+# Git worktrees
+.worktrees/
