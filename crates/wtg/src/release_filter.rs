@@ -71,6 +71,7 @@ mod tests {
             release_name: None,
             release_url: None,
             published_at: None,
+            tag_url: None,
         }
     }
 

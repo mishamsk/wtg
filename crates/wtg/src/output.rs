@@ -527,17 +527,10 @@ fn display_file(file_result: FileResult, filter: &ReleaseFilter) {
     }
 
     // Release info
-    display_release_info(
-        file_result.release,
-        file_result.commit_url.as_deref(),
-        filter,
-    );
+    display_release_info(file_result.release, filter);
 }
 
-fn display_release_info(
-    release: Option<TagInfo>,
-    filter: &ReleaseFilter,
-) {
+fn display_release_info(release: Option<TagInfo>, filter: &ReleaseFilter) {
     // Special messaging when checking a specific release
     if let Some(tag_name) = filter.specific_tag() {
         println!("{}", "📦 Release check:".magenta().bold());
