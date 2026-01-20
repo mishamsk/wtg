@@ -82,3 +82,75 @@ Notes
 ## Escalation & Safety
 - If you encounter missing prerequisites, environmental blockers, or suspect corrupted state, halt and notify the maintainer immediately with observed details and attempted mitigations.
 - Use workspace caches listed in the harness configuration for temporary artifacts; avoid writing outside allowed paths.
+
+## Release Flow
+
+This section defines the process for preparing and publishing a release. Execute via `/release [version]` command.
+
+### Prerequisites
+- Clean working tree (no uncommitted changes)
+- On `main` branch
+- CI passing on current HEAD
+
+### Phase 1: Changelog Review
+1. Identify the last released tag (`git describe --tags --abbrev=0`)
+2. Gather all commits since last tag (`git log <last-tag>..HEAD --oneline`)
+3. Cross-reference with GitHub PRs merged since last release
+4. Compare against current CHANGELOG.md Unreleased section
+5. Identify missing user-facing items:
+   - New features, enhancements, bug fixes
+   - Breaking changes
+   - Security updates
+6. Update CHANGELOG.md preserving existing format:
+   - Keep same verbosity level as existing entries
+   - Include PR references (e.g., `([#4](https://github.com/mishamsk/wtg/pull/4))`)
+   - Categorize into Added/Changed/Deprecated/Removed/Fixed/Security
+
+### Phase 2: User Verification
+1. Present changelog diff to user
+2. Wait for user confirmation before proceeding
+3. If rejected, iterate on changelog updates
+
+### Phase 3: Version Assignment
+1. Determine target version:
+   - Use argument if provided (e.g., `/release 0.3.0`)
+   - Otherwise infer from changes using semver:
+     - MAJOR: Breaking changes
+     - MINOR: New features (Added section has entries)
+     - PATCH: Bug fixes only
+2. Create new empty Unreleased section at top of CHANGELOG.md
+3. Assign version and date to current changelog section
+4. Update workspace `Cargo.toml` version field
+
+### Phase 4: Commit and Push
+1. Stage changes: `CHANGELOG.md`, `Cargo.toml`
+2. Commit with message: `chore: prepare release vX.Y.Z`
+3. Push to origin/main
+
+### Phase 5: Test PyPI Validation
+1. Trigger `publish-test-pypi.yml` workflow via `gh workflow run`
+2. Wait for workflow completion (poll every 2 minutes, timeout 15 minutes)
+3. Test installation and basic commands:
+   ```bash
+   uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --help
+   uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --version
+   uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg v0.1.0
+   ```
+
+### Phase 6: Release Confirmation
+1. Report test results to user
+2. If issues found, stop and await guidance
+3. If successful, ask user for final release confirmation
+
+### Phase 7: Tag and Release
+1. Create signed tag: `git tag -s -m "release vX.Y.Z" vX.Y.Z`
+2. Push tag: `git push origin vX.Y.Z`
+3. Report: Release workflow triggered, link to GitHub Actions
+
+### Abort Conditions
+- Uncommitted changes in working tree
+- Not on main branch
+- CI failing
+- Test PyPI workflow fails
+- Test installation fails
+- User declines at any verification step

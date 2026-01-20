@@ -98,8 +98,8 @@ mise.local.toml
 
 # claude
 CLAUDE.local.md
-.claude/
-.claude
+.claude/*
+!.claude/commands/
 
 # Git worktrees
 .worktrees/
