@@ -137,19 +137,25 @@ async fn test_identify_tag(test_repo: TestRepoFixture) {
         .await
         .expect("Failed to identify tag");
 
-    // Verify it's a tag-only result
+    // Verify it's a Tag result
     match result {
-        IdentifiedThing::TagOnly(tag_info, _github_url) => {
-            assert_eq!(tag_info.name, "v1.0.0");
-            assert_eq!(tag_info.commit_hash, test_repo.commits.commit1_add_file);
-            assert!(tag_info.is_semver());
+        IdentifiedThing::Tag(tag_result) => {
+            assert_eq!(tag_result.tag_info.name, "v1.0.0");
+            assert_eq!(
+                tag_result.tag_info.commit_hash,
+                test_repo.commits.commit1_add_file
+            );
+            assert!(tag_result.tag_info.is_semver());
 
-            let semver = tag_info.semver_info.expect("Should have semver info");
+            let semver = tag_result
+                .tag_info
+                .semver_info
+                .expect("Should have semver info");
             assert_eq!(semver.major, 1);
             assert_eq!(semver.minor, 0);
             assert_eq!(semver.patch, Some(0));
         }
-        _ => panic!("Expected TagOnly result, got something else"),
+        _ => panic!("Expected Tag result, got something else"),
     }
 }
 
@@ -162,6 +168,97 @@ async fn test_identify_nonexistent(test_repo: TestRepoFixture) {
         .disambiguate_query(&ParsedQuery::Unknown("nonexistent-thing".to_string()))
         .await;
     assert!(result.is_err());
+}
+
+/// Test finding previous tag for a semver release
+#[rstest]
+#[tokio::test]
+async fn test_find_previous_tag() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let repo_path = temp_dir.path().to_path_buf();
+
+    // Setup git repo with multiple semver tags
+    {
+        let repo = git2::Repository::init(&repo_path).expect("init repo");
+        let signature = git2::Signature::now("Test User", "test@example.com").expect("signature");
+
+        // Create initial commit with v1.0.0 tag
+        let file = repo_path.join("file.txt");
+        std::fs::write(&file, "v1").expect("write");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("file.txt")).expect("add");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let commit1 = repo
+            .commit(Some("HEAD"), &signature, &signature, "v1.0.0", &tree, &[])
+            .expect("commit");
+        let commit1_obj = repo.find_commit(commit1).expect("find commit");
+        repo.tag_lightweight("v1.0.0", commit1_obj.as_object(), false)
+            .expect("tag");
+
+        // Create second commit with v1.1.0 tag
+        std::fs::write(&file, "v1.1").expect("write");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("file.txt")).expect("add");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let commit2 = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "v1.1.0",
+                &tree,
+                &[&commit1_obj],
+            )
+            .expect("commit");
+        let commit2_obj = repo.find_commit(commit2).expect("find commit");
+        repo.tag_lightweight("v1.1.0", commit2_obj.as_object(), false)
+            .expect("tag");
+
+        // Create third commit with v2.0.0 tag
+        std::fs::write(&file, "v2").expect("write");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("file.txt")).expect("add");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let commit3 = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "v2.0.0",
+                &tree,
+                &[&commit2_obj],
+            )
+            .expect("commit");
+        let commit3_obj = repo.find_commit(commit3).expect("find commit");
+        repo.tag_lightweight("v2.0.0", commit3_obj.as_object(), false)
+            .expect("tag");
+
+        // Create non-semver tag
+        repo.tag_lightweight("beta-release", commit3_obj.as_object(), false)
+            .expect("tag");
+    }
+
+    let repo = wtg_cli::git::GitRepo::from_path(&repo_path).expect("open repo");
+    let backend = GitBackend::new(repo);
+
+    // v1.0.0 is the first semver tag, should have no previous
+    let prev = backend.find_previous_tag("v1.0.0").await.unwrap();
+    assert!(prev.is_none(), "v1.0.0 should have no previous semver tag");
+
+    // v1.1.0 should have v1.0.0 as previous
+    let prev = backend.find_previous_tag("v1.1.0").await.unwrap();
+    assert_eq!(prev.as_ref().map(|t| t.name.as_str()), Some("v1.0.0"));
+
+    // v2.0.0 should have v1.1.0 as previous
+    let prev = backend.find_previous_tag("v2.0.0").await.unwrap();
+    assert_eq!(prev.as_ref().map(|t| t.name.as_str()), Some("v1.1.0"));
+
+    // Non-semver tag should return None
+    let prev = backend.find_previous_tag("beta-release").await.unwrap();
+    assert!(prev.is_none(), "non-semver tag should have no previous");
 }
 
 #[rstest]

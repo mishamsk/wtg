@@ -200,6 +200,7 @@ impl TryFrom<octocrab::models::issues::Issue> for ExtendedIssueInfo {
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub name: Option<String>,
+    pub body: Option<String>,
     pub url: String,
     pub published_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
@@ -563,6 +564,7 @@ impl GitHubClient {
                 releases.push(ReleaseInfo {
                     tag_name: release.tag_name,
                     name: release.name,
+                    body: release.body,
                     url: release.html_url.to_string(),
                     published_at: release.published_at,
                     created_at: release.created_at,
@@ -626,6 +628,7 @@ impl GitHubClient {
         Some(ReleaseInfo {
             tag_name: release.tag_name,
             name: release.name,
+            body: release.body,
             url: release.html_url.to_string(),
             published_at: release.published_at,
             created_at: release.created_at,
@@ -686,6 +689,7 @@ impl GitHubClient {
             release_name: release.name.clone(),
             release_url: Some(release.url.clone()),
             published_at: release.published_at,
+            tag_url: Some(release.url.clone()),
         })
     }
 
@@ -733,6 +737,13 @@ impl GitHubClient {
 
         let semver_info = parse_semver(tag_name);
 
+        // Compute tag_url: release URL for releases, tree URL for plain tags
+        let tag_url = Some(
+            release
+                .as_ref()
+                .map_or_else(|| Self::tag_url(repo_info, tag_name), |r| r.url.clone()),
+        );
+
         Some(TagInfo {
             name: tag_name.to_string(),
             commit_hash: commit.hash,
@@ -742,7 +753,48 @@ impl GitHubClient {
             release_name: release.as_ref().and_then(|r| r.name.clone()),
             release_url: release.as_ref().map(|r| r.url.clone()),
             published_at: release.and_then(|r| r.published_at),
+            tag_url,
         })
+    }
+
+    /// Fetch file content from the default branch.
+    ///
+    /// Returns the decoded file content as a String, or None if the file
+    /// doesn't exist or can't be decoded (e.g., binary files).
+    pub async fn fetch_file_content(&self, repo_info: &GhRepoInfo, path: &str) -> Option<String> {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
+
+        let content = self
+            .call_client_api_with_fallback(move |client| {
+                let path = path.to_string();
+                let repo_info = repo_info.clone();
+                Box::pin(async move {
+                    client
+                        .repos(repo_info.owner(), repo_info.repo())
+                        .get_content()
+                        .path(&path)
+                        .send()
+                        .await
+                })
+            })
+            .await
+            .ok()?;
+
+        // The API returns an array for directories, single item for files
+        let file_content = match content.items.into_iter().next()? {
+            octocrab::models::repos::Content {
+                content: Some(encoded),
+                ..
+            } => {
+                // Content is base64 encoded with newlines, need to remove them
+                let cleaned: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
+                STANDARD.decode(&cleaned).ok()?
+            }
+            _ => return None, // No content or it's a directory
+        };
+
+        String::from_utf8(file_content).ok()
     }
 
     /// Build GitHub URLs for various things
@@ -759,13 +811,26 @@ impl GitHubClient {
         )
     }
 
-    /// Build a tag URL (fallback when API data unavailable)
-    /// Uses URL encoding to prevent injection
+    /// Build a tag URL pointing to the tree view (for plain git tags).
+    /// Uses URL encoding to prevent injection.
     #[must_use]
     pub fn tag_url(repo_info: &GhRepoInfo, tag: &str) -> String {
         use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         format!(
             "https://github.com/{}/{}/tree/{}",
+            utf8_percent_encode(repo_info.owner(), NON_ALPHANUMERIC),
+            utf8_percent_encode(repo_info.repo(), NON_ALPHANUMERIC),
+            utf8_percent_encode(tag, NON_ALPHANUMERIC)
+        )
+    }
+
+    /// Build a release URL pointing to the releases page (for tags with releases).
+    /// Uses URL encoding to prevent injection.
+    #[must_use]
+    pub fn release_tag_url(repo_info: &GhRepoInfo, tag: &str) -> String {
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+        format!(
+            "https://github.com/{}/{}/releases/tag/{}",
             utf8_percent_encode(repo_info.owner(), NON_ALPHANUMERIC),
             utf8_percent_encode(repo_info.repo(), NON_ALPHANUMERIC),
             utf8_percent_encode(tag, NON_ALPHANUMERIC)

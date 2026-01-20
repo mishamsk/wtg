@@ -11,6 +11,7 @@ use crate::release_filter::ReleaseFilter;
 use crate::resolution::resolve;
 
 pub mod backend;
+pub mod changelog;
 pub mod cli;
 pub mod constants;
 pub mod error;

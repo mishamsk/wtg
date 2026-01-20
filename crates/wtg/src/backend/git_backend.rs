@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::{Backend, NoticeCallback};
+use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, GitRepo, TagInfo, looks_like_commit_hash};
 use crate::github::GitHubClient;
@@ -200,6 +201,63 @@ impl Backend for GitBackend {
             .ok_or_else(|| WtgError::NotFound(name.to_string()))
     }
 
+    async fn find_previous_tag(&self, tag_name: &str) -> WtgResult<Option<TagInfo>> {
+        let tags = self.repo.get_tags();
+        let current_tag = tags.iter().find(|t| t.name == tag_name);
+
+        let Some(current) = current_tag else {
+            return Ok(None);
+        };
+
+        // If current is semver, find previous by semver ordering
+        if current.is_semver() {
+            let mut semver_tags: Vec<_> = tags.iter().filter(|t| t.is_semver()).collect();
+
+            // Sort by semver (ascending)
+            semver_tags.sort_by(|a, b| {
+                let a_semver = a.semver_info.as_ref().unwrap();
+                let b_semver = b.semver_info.as_ref().unwrap();
+                a_semver.cmp(b_semver)
+            });
+
+            // Find current position and return previous
+            if let Some(pos) = semver_tags.iter().position(|t| t.name == tag_name)
+                && pos > 0
+            {
+                return Ok(Some(semver_tags[pos - 1].clone()));
+            }
+            return Ok(None);
+        }
+
+        // Non-semver: find most recent tag on an earlier commit
+        let current_timestamp = self.repo.get_commit_timestamp(&current.commit_hash);
+
+        let mut candidates: Vec<_> = tags
+            .iter()
+            .filter(|t| t.name != tag_name)
+            .filter(|t| t.commit_hash != current.commit_hash)
+            .filter(|t| self.repo.get_commit_timestamp(&t.commit_hash) < current_timestamp)
+            .collect();
+
+        // Sort by timestamp descending (most recent first)
+        candidates.sort_by(|a, b| {
+            let a_ts = self.repo.get_commit_timestamp(&a.commit_hash);
+            let b_ts = self.repo.get_commit_timestamp(&b.commit_hash);
+            b_ts.cmp(&a_ts)
+        });
+
+        Ok(candidates.first().map(|t| (*t).clone()))
+    }
+
+    async fn commits_between_tags(
+        &self,
+        from_tag: &str,
+        to_tag: &str,
+        limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        Ok(self.repo.commits_between(from_tag, to_tag, limit))
+    }
+
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
             ParsedQuery::Resolved(resolved) => Ok(resolved.clone()),
@@ -219,6 +277,10 @@ impl Backend for GitBackend {
         self.find_best_tag_for_commit(commit_hash, filter)
     }
 
+    async fn changelog_for_version(&self, version: &str) -> Option<String> {
+        changelog::parse_changelog_for_version(self.repo.path(), version)
+    }
+
     // ============================================
     // URL generation
     // ============================================
@@ -233,6 +295,12 @@ impl Backend for GitBackend {
         self.repo
             .github_remote()
             .map(|ri| GitHubClient::tag_url(&ri, tag))
+    }
+
+    fn release_tag_url(&self, tag: &str) -> Option<String> {
+        self.repo
+            .github_remote()
+            .map(|ri| GitHubClient::release_tag_url(&ri, tag))
     }
 
     fn author_url_from_email(&self, email: &str) -> Option<String> {

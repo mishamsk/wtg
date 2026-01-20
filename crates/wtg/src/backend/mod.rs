@@ -84,6 +84,26 @@ pub trait Backend: Send + Sync {
         Err(WtgError::Unsupported("tag lookup".into()))
     }
 
+    /// Find the previous tag before the given tag.
+    ///
+    /// For semver tags, returns the immediately preceding version by semver ordering.
+    /// For non-semver tags, returns the most recent tag pointing to an earlier commit.
+    async fn find_previous_tag(&self, _tag_name: &str) -> WtgResult<Option<TagInfo>> {
+        Err(WtgError::Unsupported("find previous tag".into()))
+    }
+
+    /// Get commits between two tags (`from_tag` exclusive, `to_tag` inclusive).
+    ///
+    /// Returns up to `limit` commits, most recent first.
+    async fn commits_between_tags(
+        &self,
+        _from_tag: &str,
+        _to_tag: &str,
+        _limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        Err(WtgError::Unsupported("commits between tags".into()))
+    }
+
     /// Disambiguate a parsed query into a concrete query.
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
         match query {
@@ -105,6 +125,20 @@ pub trait Backend: Send + Sync {
         _commit_date: Option<DateTime<Utc>>,
         _filter: &ReleaseFilter,
     ) -> Option<TagInfo> {
+        None
+    }
+
+    /// Fetch the body/description of a GitHub release by tag name.
+    async fn fetch_release_body(&self, _tag_name: &str) -> Option<String> {
+        None
+    }
+
+    /// Parse changelog for a specific version from repository root.
+    ///
+    /// Returns the changelog section content for the given version, or None if
+    /// not found. Backends implement this to access CHANGELOG.md via their
+    /// native method (local filesystem or API).
+    async fn changelog_for_version(&self, _version: &str) -> Option<String> {
         None
     }
 
@@ -135,8 +169,13 @@ pub trait Backend: Send + Sync {
         None
     }
 
-    /// Generate URL to view a tag.
+    /// Generate URL to view a tag (tree view for plain git tags).
     fn tag_url(&self, _tag: &str) -> Option<String> {
+        None
+    }
+
+    /// Generate URL to view a release (releases page for tags with releases).
+    fn release_tag_url(&self, _tag: &str) -> Option<String> {
         None
     }
 

@@ -3182,6 +3182,7 @@ name = "wtg-cli"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
  "clap",
  "crossterm",

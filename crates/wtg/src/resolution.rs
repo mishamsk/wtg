@@ -5,6 +5,7 @@
 //! the types for representing resolved information.
 
 use crate::backend::Backend;
+use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
@@ -78,11 +79,37 @@ pub struct FileResult {
     pub release: Option<TagInfo>,
 }
 
+/// Source of changes information for a tag
+#[derive(Debug, Clone)]
+pub enum ChangesSource {
+    /// From GitHub release description
+    GitHubRelease,
+    /// From CHANGELOG.md
+    Changelog,
+    /// From commits since previous tag
+    Commits { previous_tag: String },
+}
+
+/// Enriched tag result with changes information
+#[derive(Debug, Clone)]
+pub struct TagResult {
+    pub tag_info: TagInfo,
+    pub github_url: Option<String>,
+    /// Changes content (release notes, changelog section, or commit list)
+    pub changes: Option<String>,
+    /// Where the changes came from
+    pub changes_source: Option<ChangesSource>,
+    /// Number of lines truncated (0 if not truncated)
+    pub truncated_lines: usize,
+    /// Commits between this tag and previous (when source is Commits)
+    pub commits: Vec<CommitInfo>,
+}
+
 #[derive(Debug, Clone)]
 pub enum IdentifiedThing {
     Enriched(Box<EnrichedInfo>),
     File(Box<FileResult>),
-    TagOnly(Box<TagInfo>, Option<String>), // Just a tag, no commit yet
+    Tag(Box<TagResult>),
 }
 
 // ============================================
@@ -275,9 +302,100 @@ async fn resolve_file(
     })))
 }
 
+/// Select the best changes source, falling back to commits if needed.
+async fn select_best_changes(
+    backend: &dyn Backend,
+    tag_name: &str,
+    release_body: Option<&str>,
+    changelog_content: Option<&str>,
+) -> (
+    Option<String>,
+    Option<ChangesSource>,
+    usize,
+    Vec<CommitInfo>,
+) {
+    // Select the best source: prefer longer content, ties go to release
+    let best_source = match (release_body, changelog_content) {
+        // Both available: prefer the longer one, tie goes to release
+        (Some(release), Some(changelog)) => {
+            if release.trim().len() >= changelog.trim().len() {
+                Some((release.to_string(), ChangesSource::GitHubRelease))
+            } else {
+                Some((changelog.to_string(), ChangesSource::Changelog))
+            }
+        }
+        // Only release available
+        (Some(release), None) if !release.trim().is_empty() => {
+            Some((release.to_string(), ChangesSource::GitHubRelease))
+        }
+        // Only changelog available
+        (None, Some(changelog)) if !changelog.trim().is_empty() => {
+            Some((changelog.to_string(), ChangesSource::Changelog))
+        }
+        // Neither available or both empty
+        _ => None,
+    };
+
+    if let Some((content, source)) = best_source {
+        let (truncated_content, remaining) = changelog::truncate_content(&content);
+        return (
+            Some(truncated_content.to_string()),
+            Some(source),
+            remaining,
+            Vec::new(),
+        );
+    }
+
+    // Fall back to commits
+    if let Ok(Some(prev_tag)) = backend.find_previous_tag(tag_name).await
+        && let Ok(commits) = backend
+            .commits_between_tags(&prev_tag.name, tag_name, 5)
+            .await
+        && !commits.is_empty()
+    {
+        return (
+            None,
+            Some(ChangesSource::Commits {
+                previous_tag: prev_tag.name,
+            }),
+            0,
+            commits,
+        );
+    }
+
+    // No changes available
+    (None, None, 0, Vec::new())
+}
+
 /// Resolve a tag name to `IdentifiedThing`.
 async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedThing> {
     let tag = backend.find_tag(name).await?;
-    let url = backend.tag_url(name);
-    Ok(IdentifiedThing::TagOnly(Box::new(tag), url))
+
+    // Try to get changelog section via backend
+    let changelog_content = backend.changelog_for_version(name).await;
+
+    // Try to get release body from GitHub (only if it's a release)
+    let release_body = if tag.is_release {
+        backend.fetch_release_body(name).await
+    } else {
+        None
+    };
+
+    // Determine best source and get commits if needed
+    let (changes, source, truncated, commits) = select_best_changes(
+        backend,
+        name,
+        release_body.as_deref(),
+        changelog_content.as_deref(),
+    )
+    .await;
+
+    Ok(IdentifiedThing::Tag(Box::new(TagResult {
+        tag_info: tag.clone(),
+        github_url: tag.tag_url,
+        changes,
+        changes_source: source,
+        truncated_lines: truncated,
+        commits,
+    })))
 }

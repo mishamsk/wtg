@@ -141,8 +141,9 @@ impl CombinedBackend {
                     {
                         candidate.is_release = true;
                         candidate.release_name.clone_from(&release.name);
-                        candidate.release_url = Some(release.url);
+                        candidate.release_url = Some(release.url.clone());
                         candidate.published_at = release.published_at;
+                        candidate.tag_url = Some(release.url);
                     }
                 }
             }
@@ -345,7 +346,48 @@ impl Backend for CombinedBackend {
     // ============================================
 
     async fn find_tag(&self, name: &str) -> WtgResult<TagInfo> {
-        self.git.find_tag(name).await
+        let mut tag = self.git.find_tag(name).await?;
+
+        // Check if tag has a GitHub release (git backend can't determine this)
+        if let Some(release) = self
+            .github
+            .client()
+            .fetch_release_by_tag(self.github.repo_info(), name)
+            .await
+        {
+            tag.is_release = true;
+            tag.release_name = release.name;
+            tag.release_url = Some(release.url.clone());
+            tag.published_at = release.published_at;
+            tag.tag_url = Some(release.url);
+        } else {
+            // Plain tag - set tag_url to tree view
+            tag.tag_url = self.tag_url(name);
+        }
+
+        Ok(tag)
+    }
+
+    async fn find_previous_tag(&self, tag_name: &str) -> WtgResult<Option<TagInfo>> {
+        // Use git backend for local tag lookup (faster)
+        self.git.find_previous_tag(tag_name).await
+    }
+
+    async fn commits_between_tags(
+        &self,
+        from_tag: &str,
+        to_tag: &str,
+        limit: usize,
+    ) -> WtgResult<Vec<CommitInfo>> {
+        // Try git first, fall back to GitHub
+        match self.git.commits_between_tags(from_tag, to_tag, limit).await {
+            Ok(commits) if !commits.is_empty() => Ok(commits),
+            _ => {
+                self.github
+                    .commits_between_tags(from_tag, to_tag, limit)
+                    .await
+            }
+        }
     }
 
     async fn find_release_for_commit(
@@ -356,6 +398,19 @@ impl Backend for CombinedBackend {
     ) -> Option<TagInfo> {
         self.find_release_combined(commit_hash, commit_date, filter)
             .await
+    }
+
+    async fn fetch_release_body(&self, tag_name: &str) -> Option<String> {
+        self.github.fetch_release_body(tag_name).await
+    }
+
+    async fn changelog_for_version(&self, version: &str) -> Option<String> {
+        // Try git backend first (local filesystem is faster)
+        if let Some(content) = self.git.changelog_for_version(version).await {
+            return Some(content);
+        }
+        // Fallback to GitHub API
+        self.github.changelog_for_version(version).await
     }
 
     async fn disambiguate_query(&self, query: &ParsedQuery) -> WtgResult<Query> {
@@ -398,6 +453,10 @@ impl Backend for CombinedBackend {
 
     fn tag_url(&self, tag: &str) -> Option<String> {
         self.github.tag_url(tag)
+    }
+
+    fn release_tag_url(&self, tag: &str) -> Option<String> {
+        self.github.release_tag_url(tag)
     }
 
     fn author_url_from_email(&self, email: &str) -> Option<String> {

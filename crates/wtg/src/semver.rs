@@ -15,6 +15,40 @@ pub struct SemverInfo {
     pub build_metadata: Option<String>,
 }
 
+impl Ord for SemverInfo {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.major.cmp(&other.major) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        match self.minor.cmp(&other.minor) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        match self.patch.cmp(&other.patch) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        match self.build.cmp(&other.build) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        // Pre-release: None (stable) > Some (pre-release)
+        match (&self.pre_release, &other.pre_release) {
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(a), Some(b)) => a.cmp(b),
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for SemverInfo {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Regex for parsing semantic version tags.
 /// Supports:
 /// - Optional prefix: py-, rust-, python-, etc.
@@ -320,5 +354,32 @@ mod tests {
         assert!(parse_semver("1").is_none());
         assert!(parse_semver("1.2.3.4.5").is_none());
         assert!(parse_semver("abc.def").is_none());
+    }
+
+    #[test]
+    fn test_semver_ordering() {
+        let v1_0_0 = parse_semver("1.0.0").unwrap();
+        let v1_0_1 = parse_semver("1.0.1").unwrap();
+        let v1_0_0_alpha = parse_semver("1.0.0-alpha").unwrap();
+        let v1_0_0_beta = parse_semver("1.0.0-beta").unwrap();
+
+        // Pre-release versions compare lexicographically
+        assert!(v1_0_0_alpha < v1_0_0_beta);
+        // Pre-release versions are less than stable versions
+        assert!(v1_0_0_beta < v1_0_0);
+        // Patch versions compare correctly
+        assert!(v1_0_0 < v1_0_1);
+    }
+
+    #[test]
+    fn test_semver_ordering_with_build() {
+        let v1_2_3_4 = parse_semver("1.2.3.4").unwrap();
+        let v1_2_3_5 = parse_semver("1.2.3.5").unwrap();
+        let v1_2_3 = parse_semver("1.2.3").unwrap();
+
+        // Build numbers compare correctly
+        assert!(v1_2_3_4 < v1_2_3_5);
+        // None build is less than Some build (None < Some in Option ordering)
+        assert!(v1_2_3 < v1_2_3_4);
     }
 }
