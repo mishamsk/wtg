@@ -53,11 +53,12 @@ Then:
 1. Create new empty Unreleased section in CHANGELOG.md
 2. Change `[Unreleased]` to `[X.Y.Z]` with today's date
 3. Update version in workspace Cargo.toml
+4. Run `cargo tree -d 0` to update Cargo.lock with new version
 
 ### Step 4: Commit and Push
 
 ```bash
-git add CHANGELOG.md Cargo.toml
+git add CHANGELOG.md Cargo.toml Cargo.lock
 git commit -m "chore: prepare release vX.Y.Z"
 git push origin main
 ```

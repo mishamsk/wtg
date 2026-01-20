@@ -121,9 +121,10 @@ This section defines the process for preparing and publishing a release. Execute
 2. Create new empty Unreleased section at top of CHANGELOG.md
 3. Assign version and date to current changelog section
 4. Update workspace `Cargo.toml` version field
+5. Run `cargo tree -d 0` to update `Cargo.lock` with new version
 
 ### Phase 4: Commit and Push
-1. Stage changes: `CHANGELOG.md`, `Cargo.toml`
+1. Stage changes: `CHANGELOG.md`, `Cargo.toml`, `Cargo.lock`
 2. Commit with message: `chore: prepare release vX.Y.Z`
 3. Push to origin/main
 

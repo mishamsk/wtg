@@ -9,11 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased] - ReleaseDate
 
 ### Added
-- Add opt-in debug logging via `log` crate.
-- `Notice::GhRateLimitHit` to surface rate limit errors to users with actionable guidance.
-- `-S, --skip-prereleases` flag to filter pre-release versions when finding releases. ([#4](https://github.com/mishamsk/wtg/pull/4))
-- Second positional argument to check if a query result is in a specific release (e.g., `wtg abc123 v2.0.0`). ([#4](https://github.com/mishamsk/wtg/pull/4))
-- Enriched tag output showing release notes, changelog entries, and commits since previous version. ([#7](https://github.com/mishamsk/wtg/pull/7))
+-
 
 ### Changed
 -
@@ -25,10 +21,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 -
 
 ### Fixed
-- CI integration tests now use authenticated GitHub API access (5000 req/hr vs 60 req/hr anonymous).
+-
 
 ### Security
 -
+
+## [0.3.0] - 2026-01-19
+
+### Added
+- Opt-in debug logging via `log` crate. ([#6](https://github.com/mishamsk/wtg/pull/6))
+- `Notice::GhRateLimitHit` to surface rate limit errors to users with actionable guidance. ([#6](https://github.com/mishamsk/wtg/pull/6))
+- `-S, --skip-prereleases` flag to filter pre-release versions when finding releases. ([#4](https://github.com/mishamsk/wtg/pull/4))
+- Second positional argument to check if a query result is in a specific release (e.g., `wtg abc123 v2.0.0`). ([#4](https://github.com/mishamsk/wtg/pull/4))
+- Enriched tag output showing release notes, changelog entries, and commits since previous version. ([#7](https://github.com/mishamsk/wtg/pull/7))
+
+### Fixed
+- CI integration tests now use authenticated GitHub API access (5000 req/hr vs 60 req/hr anonymous). ([#6](https://github.com/mishamsk/wtg/pull/6))
 
 ## [0.2.0] - 2025-01-18
 
