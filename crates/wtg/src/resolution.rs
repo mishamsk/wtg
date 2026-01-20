@@ -321,8 +321,8 @@ async fn select_best_changes(
     use crate::changelog;
 
     // Compare release body and changelog, pick the more substantial one
-    let release_len = release_body.map(|s| s.trim().len()).unwrap_or(0);
-    let changelog_len = changelog_content.map(|s| s.trim().len()).unwrap_or(0);
+    let release_len = release_body.map_or(0, |s| s.trim().len());
+    let changelog_len = changelog_content.map_or(0, |s| s.trim().len());
 
     if release_len > 0 || changelog_len > 0 {
         let (content, source) = if release_len >= changelog_len && release_len > 0 {
@@ -347,22 +347,20 @@ async fn select_best_changes(
     }
 
     // Fall back to commits
-    if let Ok(Some(prev_tag)) = backend.find_previous_tag(tag_name).await {
-        if let Ok(commits) = backend
+    if let Ok(Some(prev_tag)) = backend.find_previous_tag(tag_name).await
+        && let Ok(commits) = backend
             .commits_between_tags(&prev_tag.name, tag_name, 5)
             .await
-        {
-            if !commits.is_empty() {
-                return (
-                    None,
-                    Some(ChangesSource::Commits {
-                        previous_tag: prev_tag.name,
-                    }),
-                    0,
-                    commits,
-                );
-            }
-        }
+        && !commits.is_empty()
+    {
+        return (
+            None,
+            Some(ChangesSource::Commits {
+                previous_tag: prev_tag.name,
+            }),
+            0,
+            commits,
+        );
     }
 
     // No changes available
@@ -377,11 +375,8 @@ async fn resolve_tag(backend: &dyn Backend, name: &str) -> WtgResult<IdentifiedT
     let url = backend.tag_url(name);
 
     // Try to get changelog section
-    let changelog_content = if let Some(repo_path) = get_repo_path() {
-        changelog::parse_changelog_for_version(&repo_path, name)
-    } else {
-        None
-    };
+    let changelog_content = get_repo_path()
+        .and_then(|repo_path| changelog::parse_changelog_for_version(&repo_path, name));
 
     // For now, release_body is None - Task 9 will add fetch_release_body
     let release_body: Option<String> = None;

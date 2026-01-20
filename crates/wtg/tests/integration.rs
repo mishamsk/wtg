@@ -348,21 +348,21 @@ fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
             file_path: None,
             previous_authors_count: None,
         },
-        IdentifiedThing::TagOnly(tag_info, github_url) => IntegrationSnapshot {
-            result_type: "tag_only".to_string(),
+        IdentifiedThing::Tag(tag_result) => IntegrationSnapshot {
+            result_type: "tag".to_string(),
             entry_point: None,
             commit_message: None,
             commit_author: None,
-            has_commit_url: github_url.is_some(),
+            has_commit_url: tag_result.github_url.is_some(),
             has_pr: false,
             has_issue: false,
-            release_name: if tag_info.is_release {
-                Some(tag_info.name.clone())
+            release_name: if tag_result.tag_info.is_release {
+                Some(tag_result.tag_info.name.clone())
             } else {
                 None
             },
-            release_is_semver: Some(tag_info.is_semver()),
-            tag_name: Some(tag_info.name.clone()),
+            release_is_semver: Some(tag_result.tag_info.is_semver()),
+            tag_name: Some(tag_result.tag_info.name.clone()),
             file_path: None,
             previous_authors_count: None,
         },

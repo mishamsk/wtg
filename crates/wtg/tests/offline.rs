@@ -137,19 +137,25 @@ async fn test_identify_tag(test_repo: TestRepoFixture) {
         .await
         .expect("Failed to identify tag");
 
-    // Verify it's a tag-only result
+    // Verify it's a Tag result
     match result {
-        IdentifiedThing::TagOnly(tag_info, _github_url) => {
-            assert_eq!(tag_info.name, "v1.0.0");
-            assert_eq!(tag_info.commit_hash, test_repo.commits.commit1_add_file);
-            assert!(tag_info.is_semver());
+        IdentifiedThing::Tag(tag_result) => {
+            assert_eq!(tag_result.tag_info.name, "v1.0.0");
+            assert_eq!(
+                tag_result.tag_info.commit_hash,
+                test_repo.commits.commit1_add_file
+            );
+            assert!(tag_result.tag_info.is_semver());
 
-            let semver = tag_info.semver_info.expect("Should have semver info");
+            let semver = tag_result
+                .tag_info
+                .semver_info
+                .expect("Should have semver info");
             assert_eq!(semver.major, 1);
             assert_eq!(semver.minor, 0);
             assert_eq!(semver.patch, Some(0));
         }
-        _ => panic!("Expected TagOnly result, got something else"),
+        _ => panic!("Expected Tag result, got something else"),
     }
 }
 

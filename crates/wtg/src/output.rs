@@ -9,42 +9,111 @@ use crate::github::PullRequestInfo;
 use crate::notice::Notice;
 use crate::release_filter::ReleaseFilter;
 use crate::remote::{RemoteHost, RemoteInfo};
-use crate::resolution::{EnrichedInfo, EntryPoint, FileResult, IdentifiedThing, IssueInfo};
+use crate::resolution::{
+    ChangesSource, EnrichedInfo, EntryPoint, FileResult, IdentifiedThing, IssueInfo, TagResult,
+};
 
 pub fn display(thing: IdentifiedThing, filter: &ReleaseFilter) -> WtgResult<()> {
     match thing {
         IdentifiedThing::Enriched(info) => display_enriched(*info, filter),
         IdentifiedThing::File(file_result) => display_file(*file_result, filter),
-        IdentifiedThing::TagOnly(tag_info, github_url) => {
-            display_tag_warning(*tag_info, github_url);
-        }
+        IdentifiedThing::Tag(tag_result) => display_tag(&tag_result),
     }
 
     Ok(())
 }
 
-/// Display tag with humor - tags aren't supported yet
-fn display_tag_warning(tag_info: TagInfo, github_url: Option<String>) {
+/// Display tag information with changes from best available source
+fn display_tag(result: &TagResult) {
+    let tag = &result.tag_info;
+
+    // Header
+    println!("{} {}", "🏷️  Tag:".green().bold(), tag.name.as_str().cyan());
     println!(
         "{} {}",
-        "🏷️  Found tag:".green().bold(),
-        tag_info.name.cyan()
-    );
-    println!();
-    println!("{}", "🐎 Whoa there, slow down cowboy!".yellow().bold());
-    println!();
-    println!(
-        "   {}",
-        "Tags aren't fully baked yet. I found it, but can't tell you much about it.".white()
-    );
-    println!(
-        "   {}",
-        "Come back when you have a commit hash, PR, or issue to look up!".white()
+        "📅 Created:".yellow(),
+        tag.created_at.format("%Y-%m-%d").to_string().dark_grey()
     );
 
-    if let Some(url) = github_url {
-        println!();
-        print_link(&url);
+    // URL - prefer release URL if available
+    if let Some(url) = tag.release_url.as_ref().or(result.github_url.as_ref()) {
+        println!(
+            "{} {}",
+            "🔗 Release:".blue(),
+            url.as_str().blue().underlined()
+        );
+    }
+
+    println!();
+
+    // Changes section
+    if let Some(source) = &result.changes_source {
+        let source_label = match source {
+            ChangesSource::GitHubRelease => "(from GitHub release)".to_string(),
+            ChangesSource::Changelog => "(from CHANGELOG)".to_string(),
+            ChangesSource::Commits { previous_tag } => {
+                format!("(commits since {previous_tag})")
+            }
+        };
+
+        println!(
+            "{} {}",
+            "Changes".magenta().bold(),
+            source_label.as_str().dark_grey()
+        );
+
+        match source {
+            ChangesSource::Commits { .. } => {
+                // Display commits as bullet list
+                for commit in &result.commits {
+                    println!(
+                        "• {} {}",
+                        commit.short_hash.as_str().cyan(),
+                        commit.message.as_str().white()
+                    );
+                }
+            }
+            _ => {
+                // Display text content
+                if let Some(content) = &result.changes {
+                    for line in content.lines() {
+                        println!("{line}");
+                    }
+                }
+            }
+        }
+
+        // Truncation notice
+        if result.truncated_lines > 0 {
+            if let Some(url) = tag.release_url.as_ref().or(result.github_url.as_ref()) {
+                println!(
+                    "{}",
+                    format!(
+                        "... {} more lines (see full release at {})",
+                        result.truncated_lines, url
+                    )
+                    .as_str()
+                    .dark_grey()
+                    .italic()
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!("... {} more lines", result.truncated_lines)
+                        .as_str()
+                        .dark_grey()
+                        .italic()
+                );
+            }
+        }
+    } else {
+        // No changes available - just show the tag exists
+        println!(
+            "{}",
+            "No release notes, changelog entry, or previous tag found."
+                .dark_grey()
+                .italic()
+        );
     }
 }
 
