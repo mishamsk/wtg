@@ -9,7 +9,7 @@ commit_author: ~
 has_commit_url: true
 has_pr: false
 has_issue: false
-release_name: ~
+release_name: v0.1.0
 release_is_semver: true
 tag_name: v0.1.0
 file_path: ~

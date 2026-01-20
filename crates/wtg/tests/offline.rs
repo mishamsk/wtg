@@ -173,24 +173,92 @@ async fn test_identify_nonexistent(test_repo: TestRepoFixture) {
 /// Test finding previous tag for a semver release
 #[rstest]
 #[tokio::test]
-async fn test_find_previous_tag(test_repo: TestRepoFixture) {
-    let backend = GitBackend::new(test_repo.repo);
+async fn test_find_previous_tag() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let repo_path = temp_dir.path().to_path_buf();
 
-    // The test repo has: commit0 (initial), commit1 (v1.0.0 tag), commit2 (beta-release tag)
-    // v1.0.0 is the only semver tag, so it should have no previous semver tag
+    // Setup git repo with multiple semver tags
+    {
+        let repo = git2::Repository::init(&repo_path).expect("init repo");
+        let signature = git2::Signature::now("Test User", "test@example.com").expect("signature");
+
+        // Create initial commit with v1.0.0 tag
+        let file = repo_path.join("file.txt");
+        std::fs::write(&file, "v1").expect("write");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("file.txt")).expect("add");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let commit1 = repo
+            .commit(Some("HEAD"), &signature, &signature, "v1.0.0", &tree, &[])
+            .expect("commit");
+        let commit1_obj = repo.find_commit(commit1).expect("find commit");
+        repo.tag_lightweight("v1.0.0", commit1_obj.as_object(), false)
+            .expect("tag");
+
+        // Create second commit with v1.1.0 tag
+        std::fs::write(&file, "v1.1").expect("write");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("file.txt")).expect("add");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let commit2 = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "v1.1.0",
+                &tree,
+                &[&commit1_obj],
+            )
+            .expect("commit");
+        let commit2_obj = repo.find_commit(commit2).expect("find commit");
+        repo.tag_lightweight("v1.1.0", commit2_obj.as_object(), false)
+            .expect("tag");
+
+        // Create third commit with v2.0.0 tag
+        std::fs::write(&file, "v2").expect("write");
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("file.txt")).expect("add");
+        let tree_id = index.write_tree().expect("tree");
+        let tree = repo.find_tree(tree_id).expect("tree lookup");
+        let commit3 = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "v2.0.0",
+                &tree,
+                &[&commit2_obj],
+            )
+            .expect("commit");
+        let commit3_obj = repo.find_commit(commit3).expect("find commit");
+        repo.tag_lightweight("v2.0.0", commit3_obj.as_object(), false)
+            .expect("tag");
+
+        // Create non-semver tag
+        repo.tag_lightweight("beta-release", commit3_obj.as_object(), false)
+            .expect("tag");
+    }
+
+    let repo = wtg_cli::git::GitRepo::from_path(&repo_path).expect("open repo");
+    let backend = GitBackend::new(repo);
+
+    // v1.0.0 is the first semver tag, should have no previous
     let prev = backend.find_previous_tag("v1.0.0").await.unwrap();
-    assert!(
-        prev.is_none(),
-        "v1.0.0 is the first semver tag, should have no previous"
-    );
+    assert!(prev.is_none(), "v1.0.0 should have no previous semver tag");
 
-    // beta-release is not a semver tag, so find_previous_tag should return None
-    // (the function only finds previous *semver* tags)
-    let prev_beta = backend.find_previous_tag("beta-release").await.unwrap();
-    assert!(
-        prev_beta.is_none(),
-        "beta-release is not a semver tag, should have no previous semver tag"
-    );
+    // v1.1.0 should have v1.0.0 as previous
+    let prev = backend.find_previous_tag("v1.1.0").await.unwrap();
+    assert_eq!(prev.as_ref().map(|t| t.name.as_str()), Some("v1.0.0"));
+
+    // v2.0.0 should have v1.1.0 as previous
+    let prev = backend.find_previous_tag("v2.0.0").await.unwrap();
+    assert_eq!(prev.as_ref().map(|t| t.name.as_str()), Some("v1.1.0"));
+
+    // Non-semver tag should return None
+    let prev = backend.find_previous_tag("beta-release").await.unwrap();
+    assert!(prev.is_none(), "non-semver tag should have no previous");
 }
 
 #[rstest]

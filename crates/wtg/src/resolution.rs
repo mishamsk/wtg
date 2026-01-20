@@ -314,23 +314,29 @@ async fn select_best_changes(
     usize,
     Vec<CommitInfo>,
 ) {
-    // Compare release body and changelog, pick the more substantial one
-    let release_len = release_body.map_or(0, |s| s.trim().len());
-    let changelog_len = changelog_content.map_or(0, |s| s.trim().len());
+    // Select the best source: prefer longer content, ties go to release
+    let best_source = match (release_body, changelog_content) {
+        // Both available: prefer the longer one, tie goes to release
+        (Some(release), Some(changelog)) => {
+            if release.trim().len() >= changelog.trim().len() {
+                Some((release.to_string(), ChangesSource::GitHubRelease))
+            } else {
+                Some((changelog.to_string(), ChangesSource::Changelog))
+            }
+        }
+        // Only release available
+        (Some(release), None) if !release.trim().is_empty() => {
+            Some((release.to_string(), ChangesSource::GitHubRelease))
+        }
+        // Only changelog available
+        (None, Some(changelog)) if !changelog.trim().is_empty() => {
+            Some((changelog.to_string(), ChangesSource::Changelog))
+        }
+        // Neither available or both empty
+        _ => None,
+    };
 
-    if release_len > 0 || changelog_len > 0 {
-        let (content, source) = if release_len >= changelog_len && release_len > 0 {
-            (
-                release_body.unwrap().to_string(),
-                ChangesSource::GitHubRelease,
-            )
-        } else {
-            (
-                changelog_content.unwrap().to_string(),
-                ChangesSource::Changelog,
-            )
-        };
-
+    if let Some((content, source)) = best_source {
         let (truncated_content, remaining) = changelog::truncate_content(&content);
         return (
             Some(truncated_content.to_string()),
