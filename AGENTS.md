@@ -131,9 +131,10 @@ This section defines the process for preparing and publishing a release. Execute
 ### Phase 5: Test PyPI Validation
 1. Trigger `publish-test-pypi.yml` workflow via `gh workflow run`
 2. Wait for workflow completion (poll every 2 minutes, timeout 15 minutes)
-3. Test installation and basic commands:
+3. Clear uv cache and test installation with fresh packages:
    ```bash
-   uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --help
+   uv cache clean wtg-cli
+   uvx --index-url https://test.pypi.org/simple/ --refresh --from wtg-cli wtg --help
    uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --version
    uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg v0.1.0
    ```

@@ -72,7 +72,8 @@ gh workflow run publish-test-pypi.yml
 Poll workflow status every 2 minutes until completion (max 15 minutes). When complete:
 
 ```bash
-uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --help
+uv cache clean wtg-cli
+uvx --index-url https://test.pypi.org/simple/ --refresh --from wtg-cli wtg --help
 uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --version
 uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg v0.1.0
 ```
