@@ -241,6 +241,31 @@ impl GitHubClient {
         })
     }
 
+    /// Create a GitHub client with a specific token.
+    ///
+    /// Builds an authenticated client using the given token, with an anonymous
+    /// backup for fallback on SAML or bad credentials errors.
+    /// Returns `None` if the client cannot be built.
+    #[must_use]
+    pub fn new_with_token(token: String) -> Option<Self> {
+        let connect_timeout = Some(Self::connect_timeout());
+        let read_timeout = Some(Self::read_timeout());
+
+        let auth = OctocrabBuilder::new()
+            .personal_token(token)
+            .set_connect_timeout(connect_timeout)
+            .set_read_timeout(read_timeout)
+            .build()
+            .ok()?;
+
+        Some(Self {
+            main_client: auth,
+            backup_client: LazyLock::new(Self::build_anonymous_client),
+            is_authenticated: true,
+            notice_callback: OnceLock::new(),
+        })
+    }
+
     /// Set the notice callback for this client.
     /// Can be called even when client is behind an `Arc`.
     /// First call wins - subsequent calls are ignored.
@@ -262,8 +287,10 @@ impl GitHubClient {
         let connect_timeout = Some(Self::connect_timeout());
         let read_timeout = Some(Self::read_timeout());
 
-        // Try GITHUB_TOKEN env var first
-        if let Ok(token) = env::var("GITHUB_TOKEN") {
+        // Try GITHUB_TOKEN env var first (skip empty/whitespace-only values)
+        if let Ok(token) = env::var("GITHUB_TOKEN")
+            && !token.trim().is_empty()
+        {
             return OctocrabBuilder::new()
                 .personal_token(token)
                 .set_connect_timeout(connect_timeout)
@@ -922,6 +949,11 @@ impl GitHubClient {
             }
             Err(e) if e.is_gh_saml() && self.is_authenticated => {
                 // SAML error with authenticated client - fall through to try backup
+                e
+            }
+            Err(e) if e.is_gh_bad_credentials() && self.is_authenticated => {
+                // Bad credentials (401) - token is invalid/expired, fall through to try backup
+                log::debug!("GitHub API bad credentials, falling back to anonymous client");
                 e
             }
             Err(e) => {

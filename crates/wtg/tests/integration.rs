@@ -327,6 +327,26 @@ async fn integration_specific_tag_found() {
     );
 }
 
+/// Test that an invalid `GITHUB_TOKEN` falls back to anonymous and still resolves issues.
+/// This verifies that bad credentials (401) trigger graceful fallback rather than failure.
+#[tokio::test]
+async fn integration_invalid_github_token_falls_back_to_anonymous() {
+    use wtg_cli::github::{GhRepoInfo, GitHubClient};
+
+    // Build a client with an invalid token to force 401 Bad Credentials
+    let client = GitHubClient::new_with_token("ghp_clearly_not_a_real_token_000000000".to_string())
+        .expect("Failed to create GitHub client");
+
+    // Fetch a public issue - should succeed via anonymous fallback after 401
+    let repo_info = GhRepoInfo::new("go-task".to_string(), "task".to_string());
+    let issue = client
+        .fetch_issue(&repo_info, 1322)
+        .await
+        .expect("fetch_issue should succeed via anonymous fallback on bad credentials");
+
+    assert_eq!(issue.number, 1322);
+}
+
 /// Convert `IdentifiedThing` to a consistent snapshot structure
 fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
     match result {
