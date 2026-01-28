@@ -281,8 +281,15 @@ impl GitHubClient {
         }
     }
 
-    /// Build an authenticated octocrab client
+    /// Build an authenticated octocrab client.
+    /// Returns `None` if `WTG_GH_NO_AUTH` is set or no valid token is found.
     fn build_auth_client() -> Option<Octocrab> {
+        // Undocumented: skip all authentication when WTG_GH_NO_AUTH is set
+        if env::var("WTG_GH_NO_AUTH").is_ok() {
+            log::debug!("WTG_GH_NO_AUTH set, skipping GitHub authentication");
+            return None;
+        }
+
         // Set reasonable timeouts: 5s connect, 30s read/write
         let connect_timeout = Some(Self::connect_timeout());
         let read_timeout = Some(Self::read_timeout());
