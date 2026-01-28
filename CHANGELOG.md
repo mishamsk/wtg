@@ -9,8 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased] - ReleaseDate
 
 ### Added
-- Notice when cross-project PR fetch fails during issue resolution, instead of silently swallowing errors. ([#10](https://github.com/mishamsk/wtg/pull/10))
-- SAML SSO fallback detection warns users that cross-project PR references may be missing. ([#10](https://github.com/mishamsk/wtg/pull/10))
+- Notice when cross-project PR fetch fails during issue resolution, instead of silently swallowing errors. ([#8](https://github.com/mishamsk/wtg/issues/8), [#10](https://github.com/mishamsk/wtg/pull/10))
+- SAML SSO fallback detection warns users that cross-project PR references may be missing. ([#8](https://github.com/mishamsk/wtg/issues/8), [#10](https://github.com/mishamsk/wtg/pull/10))
 - Undocumented `WTG_GH_NO_AUTH` env var to skip all authentication for debugging. ([#10](https://github.com/mishamsk/wtg/pull/10))
 
 ### Changed
@@ -23,8 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 -
 
 ### Fixed
-- Empty or whitespace-only `GITHUB_TOKEN` no longer breaks GitHub API access. ([#10](https://github.com/mishamsk/wtg/pull/10))
-- Invalid tokens (expired, revoked) now gracefully fall back to anonymous client instead of failing. ([#10](https://github.com/mishamsk/wtg/pull/10))
+- Empty or whitespace-only `GITHUB_TOKEN` no longer breaks GitHub API access. ([#9](https://github.com/mishamsk/wtg/issues/9), [#10](https://github.com/mishamsk/wtg/pull/10))
+- Invalid tokens (expired, revoked) now gracefully fall back to anonymous client instead of failing. ([#9](https://github.com/mishamsk/wtg/issues/9), [#10](https://github.com/mishamsk/wtg/pull/10))
 
 ### Security
 -
