@@ -147,15 +147,20 @@ impl fmt::Display for WtgError {
                 writeln!(
                     f,
                     "{}",
-                    "🔑 Your GitHub token got rejected! Bad credentials."
-                        .red()
+                    "🔑 Nope! GitHub doesn't recognize that token."
+                        .yellow()
                         .bold()
                 )?;
                 writeln!(f)?;
                 writeln!(
                     f,
                     "   {}",
-                    "Check that your GITHUB_TOKEN hasn't expired or been revoked.".yellow()
+                    "Expired? Revoked? Typo? It happens to the best of us. 🤷".yellow()
+                )?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Check your GITHUB_TOKEN and try again!".yellow()
                 )
             }
             Self::GitHub(e) => write!(f, "GitHub error: {e}"),
