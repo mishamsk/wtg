@@ -812,5 +812,27 @@ pub fn print_notice(notice: Notice) {
                 );
             }
         }
+        Notice::CrossProjectPrFetchFailed {
+            owner,
+            repo,
+            pr_number,
+            error,
+        } => {
+            eprintln!(
+                "{}",
+                format!(
+                    "🔍 Spotted PR #{pr_number} in {owner}/{repo}, but it's playing hard to get..."
+                )
+                .yellow()
+                .italic()
+            );
+            eprintln!("{}", format!("   ({error})").yellow().italic());
+            eprintln!(
+                "{}",
+                "   (Cross-project sleuthing needs a GITHUB_TOKEN with access!)"
+                    .yellow()
+                    .italic()
+            );
+        }
     }
 }

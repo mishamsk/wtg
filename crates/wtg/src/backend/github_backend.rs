@@ -120,8 +120,14 @@ impl GitHubBackend {
     }
 }
 
+use crate::notice::Notice;
+
 #[async_trait]
 impl Backend for GitHubBackend {
+    fn emit_notice(&self, notice: Notice) {
+        self.client.emit(notice);
+    }
+
     async fn backend_for_pr(&self, pr: &PullRequestInfo) -> Option<Box<dyn Backend>> {
         let pr_repo = pr.repo_info.as_ref()?;
 

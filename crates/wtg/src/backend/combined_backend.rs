@@ -250,6 +250,10 @@ impl CombinedBackend {
 
 #[async_trait]
 impl Backend for CombinedBackend {
+    fn emit_notice(&self, notice: Notice) {
+        self.emit(notice);
+    }
+
     async fn backend_for_pr(&self, pr: &PullRequestInfo) -> Option<Box<dyn Backend>> {
         let pr_repo = pr.repo_info.as_ref()?;
         let our_repo = self.github.repo_info();

@@ -246,7 +246,7 @@ impl GitHubClient {
     }
 
     /// Emit a notice via the callback, if one is set.
-    fn emit(&self, notice: Notice) {
+    pub(crate) fn emit(&self, notice: Notice) {
         if let Some(cb) = self.notice_callback.get() {
             (cb)(notice);
         }

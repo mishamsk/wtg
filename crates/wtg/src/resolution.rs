@@ -9,6 +9,7 @@ use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, FileInfo, TagInfo};
 use crate::github::{ExtendedIssueInfo, PullRequestInfo};
+use crate::notice::Notice;
 use crate::parse_input::Query;
 use crate::release_filter::ReleaseFilter;
 
@@ -223,20 +224,32 @@ async fn resolve_issue(
         if let Some(merge_sha) = &pr.merge_commit_sha {
             // Get backend for PR (returns cross-project backend if needed, None if same repo)
             let cross_backend = backend.backend_for_pr(pr).await;
+            let is_cross_project = cross_backend.is_some();
             let effective_backend: &dyn Backend =
                 cross_backend.as_ref().map_or(backend, |b| b.as_ref());
 
-            let commit = effective_backend.find_commit(merge_sha).await.ok();
-            let commit = match commit {
-                Some(c) => Some(effective_backend.enrich_commit(c).await),
-                None => None,
+            // Try to fetch the commit, emit notice if cross-project fetch fails
+            let commit = match effective_backend.find_commit(merge_sha).await {
+                Ok(c) => Some(effective_backend.enrich_commit(c).await),
+                Err(e) => {
+                    // Emit notice if this was a cross-project fetch failure
+                    if is_cross_project && let Some(repo_info) = pr.repo_info.as_ref() {
+                        backend.emit_notice(Notice::CrossProjectPrFetchFailed {
+                            owner: repo_info.owner().to_string(),
+                            repo: repo_info.repo().to_string(),
+                            pr_number: pr.number,
+                            error: e.to_string(),
+                        });
+                    }
+                    None
+                }
             };
 
             let release = if let Some(ref c) = commit {
                 let hash = &c.hash;
                 let date = Some(c.date);
                 // Try issue's repo first, fall back to PR's repo for releases
-                if cross_backend.is_some() {
+                if is_cross_project {
                     match backend.find_release_for_commit(hash, date, filter).await {
                         Some(r) => Some(r),
                         None => {
