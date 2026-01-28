@@ -167,6 +167,9 @@ pub struct ExtendedIssueInfo {
     pub author_url: Option<String>,
     pub closing_prs: Vec<PullRequestInfo>, // PRs that closed this issue (may be cross-repo)
     pub created_at: Option<DateTime<Utc>>, // When the issue was created
+    /// Timeline data may be incomplete due to SAML-restricted org access.
+    /// When true, closing PRs may exist but aren't visible without SSO auth.
+    pub timeline_may_be_incomplete: bool,
 }
 
 impl TryFrom<octocrab::models::issues::Issue> for ExtendedIssueInfo {
@@ -192,6 +195,7 @@ impl TryFrom<octocrab::models::issues::Issue> for ExtendedIssueInfo {
             author_url,
             closing_prs: Vec::new(), // Will be populated by caller if needed
             created_at,
+            timeline_may_be_incomplete: false,
         })
     }
 }
@@ -406,22 +410,24 @@ impl GitHubClient {
 
         // Only fetch timeline for closed issues (open issues can't have closing PRs)
         if matches!(issue_info.state, octocrab::models::IssueState::Closed) {
-            issue_info.closing_prs = self.find_closing_prs(repo_info, issue_info.number).await;
+            let (closing_prs, saml_fallback) =
+                self.find_closing_prs(repo_info, issue_info.number).await;
+            issue_info.closing_prs = closing_prs;
+            issue_info.timeline_may_be_incomplete = saml_fallback;
         }
 
         Some(issue_info)
     }
 
-    /// Find closing PRs for an issue by examining timeline events
-    /// Returns list of PR references (may be from different repositories)
-    /// Priority:
-    /// 1. Closed events with `commit_id` (clearly indicate the PR/commit that closed the issue)
-    /// 2. CrossReferenced/Referenced events (fallback, but only merged PRs)
+    /// Find closing PRs for an issue by examining timeline events.
+    /// Returns `(prs, saml_fallback)` where `saml_fallback` is true when the
+    /// timeline was fetched via an anonymous client after a SAML error, meaning
+    /// cross-project PR references may be missing from the response.
     async fn find_closing_prs(
         &self,
         repo_info: &GhRepoInfo,
         issue_number: u64,
-    ) -> Vec<PullRequestInfo> {
+    ) -> (Vec<PullRequestInfo>, bool) {
         let mut closing_prs = Vec::new();
 
         // Try to get first page with auth client, fallback to anonymous
@@ -439,8 +445,13 @@ impl GitHubClient {
             })
             .await
         else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
+
+        // Detect SAML fallback: if we're authenticated but ended up using
+        // a different client (backup/anonymous), SAML restricted the org
+        let saml_fallback =
+            self.is_authenticated && !std::ptr::eq(client, &raw const self.main_client);
 
         // Collect all timeline events to get closing commits and referenced PRs
         loop {
@@ -507,7 +518,7 @@ impl GitHubClient {
             }
         }
 
-        closing_prs
+        (closing_prs, saml_fallback)
     }
 
     /// Fetch releases from GitHub, optionally filtered by date

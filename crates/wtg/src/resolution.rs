@@ -37,6 +37,8 @@ pub struct IssueInfo {
     pub url: String,
     pub author: Option<String>,
     pub author_url: Option<String>,
+    /// Timeline data may be incomplete due to SAML-restricted org access.
+    pub timeline_may_be_incomplete: bool,
 }
 
 impl From<&ExtendedIssueInfo> for IssueInfo {
@@ -49,6 +51,7 @@ impl From<&ExtendedIssueInfo> for IssueInfo {
             url: ext_info.url.clone(),
             author: ext_info.author.clone(),
             author_url: ext_info.author_url.clone(),
+            timeline_may_be_incomplete: ext_info.timeline_may_be_incomplete,
         }
     }
 }
