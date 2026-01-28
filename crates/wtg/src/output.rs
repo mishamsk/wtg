@@ -351,11 +351,7 @@ fn display_missing_info(info: &EnrichedInfo) {
     {
         let message = if info.commit.is_none() {
             if issue.state == IssueState::Closed {
-                if issue.timeline_may_be_incomplete {
-                    "🔒 Issue closed, but the org's SSO is keeping secrets from us..."
-                } else {
-                    "🔍 Issue closed, but the trail's cold. Some stealthy hero dropped a fix and vanished without a PR."
-                }
+                "🔍 Issue closed, but the trail's cold. Some stealthy hero dropped a fix and vanished without a PR."
             } else {
                 "🔍 Couldn't trace this issue, still open. Waiting for a brave soul to pick it up..."
             }
@@ -368,7 +364,7 @@ fn display_missing_info(info: &EnrichedInfo) {
         if issue.timeline_may_be_incomplete {
             println!(
                 "{}",
-                "   (The org requires SAML SSO - grant your token access to see the full story)"
+                "   (This org requires SAML SSO - we might be missing cross-project refs. Grant your token access to find out!)"
                     .yellow()
                     .italic()
             );
