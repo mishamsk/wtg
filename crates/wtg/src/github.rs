@@ -98,6 +98,32 @@ impl GhRepoInfo {
     }
 }
 
+/// Describes which client served an API call and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientSelection {
+    /// The main (possibly authenticated) client succeeded directly.
+    Main,
+    /// The backup (anonymous) client was used after the main client failed.
+    Fallback(FallbackReason),
+}
+
+/// Why the main client failed, causing fallback to the backup client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FallbackReason {
+    /// SAML SSO enforcement blocked the authenticated request (403).
+    Saml,
+    /// Token was invalid, expired, or revoked (401).
+    BadCredentials,
+}
+
+/// Result from [`GitHubClient::call_api_and_get_client`] containing the API
+/// response, the client that served it, and how the client was selected.
+struct ApiCallResult<'a, T> {
+    value: T,
+    client: &'a Octocrab,
+    selection: ClientSelection,
+}
+
 /// GitHub API client wrapper.
 ///
 /// - Provides a simplified interface for common GitHub operations used in wtg over direct octocrab usage.
@@ -465,7 +491,7 @@ impl GitHubClient {
         let mut closing_prs = Vec::new();
 
         // Try to get first page with auth client, fallback to anonymous
-        let Ok((mut current_page, client)) = self
+        let Ok(result) = self
             .call_api_and_get_client(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -482,10 +508,12 @@ impl GitHubClient {
             return (Vec::new(), false);
         };
 
-        // Detect SAML fallback: if we're authenticated but ended up using
-        // a different client (backup/anonymous), SAML restricted the org
-        let saml_fallback =
-            self.is_authenticated && !std::ptr::eq(client, &raw const self.main_client);
+        let mut current_page = result.value;
+        let client = result.client;
+        let saml_fallback = matches!(
+            result.selection,
+            ClientSelection::Fallback(FallbackReason::Saml)
+        );
 
         // Collect all timeline events to get closing commits and referenced PRs
         loop {
@@ -569,7 +597,7 @@ impl GitHubClient {
         let per_page = 100u8; // Max allowed by GitHub API
 
         // Try to get first page with auth client, fallback to anonymous
-        let Ok((mut current_page, client)) = self
+        let Ok(result) = self
             .call_api_and_get_client(move |client| {
                 let repo_info = repo_info.clone();
                 Box::pin(async move {
@@ -587,6 +615,8 @@ impl GitHubClient {
         else {
             return releases;
         };
+        let mut current_page = result.value;
+        let client = result.client;
 
         'pagintaion: loop {
             if current_page.items.is_empty() {
@@ -928,49 +958,56 @@ impl GitHubClient {
     where
         for<'a> F: Fn(&'a Octocrab) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
     {
-        let (result, _client) = self.call_api_and_get_client(api_call).await?;
-        Ok(result)
+        let result = self.call_api_and_get_client(api_call).await?;
+        Ok(result.value)
     }
 
-    /// Call a GitHub API with fallback to backup client on SAML errors.
-    /// Returns results & the client used, or error.
+    /// Call a GitHub API with fallback to backup client on SAML or bad-credentials errors.
+    /// Returns an [`ApiCallResult`] containing the value, the client used, and how the
+    /// client was selected (see [`ClientSelection`]).
     /// Emits `Notice::GhRateLimitHit` if rate limit is detected.
-    async fn call_api_and_get_client<F, T>(&self, api_call: F) -> WtgResult<(T, &Octocrab)>
+    async fn call_api_and_get_client<F, T>(&self, api_call: F) -> WtgResult<ApiCallResult<'_, T>>
     where
         for<'a> F: Fn(&'a Octocrab) -> Pin<Box<dyn Future<Output = OctoResult<T>> + Send + 'a>>,
     {
         // Try with main client first
-        let main_error = match Self::await_with_timeout_and_error(api_call(&self.main_client)).await
-        {
-            Ok(result) => return Ok((result, &self.main_client)),
-            Err(e) if e.is_gh_rate_limit() => {
-                log::debug!(
-                    "GitHub API rate limit hit (authenticated={}): {:?}",
-                    self.is_authenticated,
-                    e
-                );
-                self.emit(Notice::GhRateLimitHit {
-                    authenticated: self.is_authenticated,
-                });
-                return Err(e);
-            }
-            Err(e) if e.is_gh_saml() && self.is_authenticated => {
-                // SAML error with authenticated client - fall through to try backup
-                e
-            }
-            Err(e) if e.is_gh_bad_credentials() && self.is_authenticated => {
-                // Bad credentials (401) - token is invalid/expired, fall through to try backup
-                log::debug!("GitHub API bad credentials, falling back to anonymous client");
-                e
-            }
-            Err(e) => {
-                // Non-SAML error, or SAML with anonymous client (no fallback possible)
-                log::debug!("GitHub API error: {e:?}");
-                return Err(e);
-            }
-        };
+        let (main_error, fallback_reason) =
+            match Self::await_with_timeout_and_error(api_call(&self.main_client)).await {
+                Ok(result) => {
+                    return Ok(ApiCallResult {
+                        value: result,
+                        client: &self.main_client,
+                        selection: ClientSelection::Main,
+                    });
+                }
+                Err(e) if e.is_gh_rate_limit() => {
+                    log::debug!(
+                        "GitHub API rate limit hit (authenticated={}): {:?}",
+                        self.is_authenticated,
+                        e
+                    );
+                    self.emit(Notice::GhRateLimitHit {
+                        authenticated: self.is_authenticated,
+                    });
+                    return Err(e);
+                }
+                Err(e) if e.is_gh_saml() && self.is_authenticated => {
+                    // SAML error with authenticated client - fall through to try backup
+                    (e, FallbackReason::Saml)
+                }
+                Err(e) if e.is_gh_bad_credentials() && self.is_authenticated => {
+                    // Bad credentials (401) - token is invalid/expired, fall through to try backup
+                    log::debug!("GitHub API bad credentials, falling back to anonymous client");
+                    (e, FallbackReason::BadCredentials)
+                }
+                Err(e) => {
+                    // Non-recoverable error, or unauthenticated client (no fallback possible)
+                    log::debug!("GitHub API error: {e:?}");
+                    return Err(e);
+                }
+            };
 
-        // Try with backup client on SAML error (only reached if authenticated)
+        // Try with backup client (only reached if authenticated and main failed with SAML or bad creds)
         let Some(backup) = self.backup_client.as_ref() else {
             // Backup client failed to build - connection was lost between auth and now
             return Err(WtgError::GhConnectionLost);
@@ -978,7 +1015,11 @@ impl GitHubClient {
 
         // Try the backup, but if it also fails with SAML, return original error
         match Self::await_with_timeout_and_error(api_call(backup)).await {
-            Ok(result) => Ok((result, backup)),
+            Ok(result) => Ok(ApiCallResult {
+                value: result,
+                client: backup,
+                selection: ClientSelection::Fallback(fallback_reason),
+            }),
             Err(e) if e.is_gh_rate_limit() => {
                 log::debug!("GitHub API rate limit hit on backup client: {e:?}");
                 // Emit notice for anonymous fallback (authenticated was true to reach here,
