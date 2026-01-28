@@ -16,6 +16,7 @@ pub enum WtgError {
     GhConnectionLost,
     GhRateLimit(OctoError),
     GhSaml(OctoError),
+    GhBadCredentials(OctoError),
     GitHub(OctoError),
     MultipleMatches(Vec<String>),
     Io(std::io::Error),
@@ -140,6 +141,26 @@ impl fmt::Display for WtgError {
                     f,
                     "   {}",
                     "Try authenticating your GITHUB_TOKEN with SAML first!".red()
+                )
+            }
+            Self::GhBadCredentials(_) => {
+                writeln!(
+                    f,
+                    "{}",
+                    "🔑 Nope! GitHub doesn't recognize that token."
+                        .yellow()
+                        .bold()
+                )?;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Expired? Revoked? Typo? It happens to the best of us. 🤷".yellow()
+                )?;
+                writeln!(
+                    f,
+                    "   {}",
+                    "Check your GITHUB_TOKEN and try again!".yellow()
                 )
             }
             Self::GitHub(e) => write!(f, "GitHub error: {e}"),
@@ -273,6 +294,7 @@ impl From<OctoError> for WtgError {
     fn from(err: OctoError) -> Self {
         if let OctoError::GitHub { ref source, .. } = err {
             match source.status_code {
+                StatusCode::UNAUTHORIZED => return Self::GhBadCredentials(err),
                 StatusCode::TOO_MANY_REQUESTS => return Self::GhRateLimit(err),
                 StatusCode::FORBIDDEN => {
                     let msg_lower = source.message.to_ascii_lowercase();

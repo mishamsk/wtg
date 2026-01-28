@@ -361,6 +361,14 @@ fn display_missing_info(info: &EnrichedInfo) {
             "🤷 No PR found for this issue... still hunting for the fix!"
         };
         println!("{}", message.yellow().italic());
+        if issue.timeline_may_be_incomplete {
+            println!(
+                "{}",
+                "   (This org requires SAML SSO - we might be missing cross-project refs. Grant your token access to find out!)"
+                    .yellow()
+                    .italic()
+            );
+        }
         println!();
     }
 
@@ -811,6 +819,28 @@ pub fn print_notice(notice: Notice) {
                         .italic()
                 );
             }
+        }
+        Notice::CrossProjectPrFetchFailed {
+            owner,
+            repo,
+            pr_number,
+            error,
+        } => {
+            eprintln!(
+                "{}",
+                format!(
+                    "🔍 Spotted PR #{pr_number} in {owner}/{repo}, but it's playing hard to get..."
+                )
+                .yellow()
+                .italic()
+            );
+            eprintln!("{}", format!("   ({error})").yellow().italic());
+            eprintln!(
+                "{}",
+                "   (Cross-project sleuthing needs a GITHUB_TOKEN with access!)"
+                    .yellow()
+                    .italic()
+            );
         }
     }
 }
