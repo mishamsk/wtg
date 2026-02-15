@@ -478,18 +478,19 @@ impl GitHubClient {
 
         // Only fetch timeline for closed issues (open issues can't have closing PRs)
         if matches!(issue_info.state, octocrab::models::IssueState::Closed) {
-            let (closing_prs, saml_fallback) =
+            let (closing_prs, timeline_may_be_incomplete) =
                 self.find_closing_prs(repo_info, issue_info.number).await;
             issue_info.closing_prs = closing_prs;
-            issue_info.timeline_may_be_incomplete = saml_fallback;
+            issue_info.timeline_may_be_incomplete = timeline_may_be_incomplete;
         }
 
         Some(issue_info)
     }
 
     /// Find closing PRs for an issue by examining timeline events.
-    /// Returns `(prs, saml_fallback)` where `saml_fallback` is true when the
-    /// timeline was fetched via an anonymous client after a SAML error, meaning
+    /// Returns `(prs, timeline_may_be_incomplete)` where the flag is true when
+    /// the timeline was fetched via an anonymous fallback client (after a SAML
+    /// or bad-credentials error) or the API call failed entirely, meaning
     /// cross-project PR references may be missing from the response.
     async fn find_closing_prs(
         &self,
@@ -513,12 +514,13 @@ impl GitHubClient {
             })
             .await
         else {
-            return (Vec::new(), false);
+            // API call failed entirely -- timeline is definitely incomplete
+            return (Vec::new(), true);
         };
 
         let mut current_page = result.value;
         let client = result.client;
-        let saml_fallback = matches!(
+        let timeline_may_be_incomplete = matches!(
             result.selection,
             ClientSelection::Fallback(FallbackReason::Saml | FallbackReason::BadCredentials)
         );
@@ -588,7 +590,7 @@ impl GitHubClient {
             }
         }
 
-        (closing_prs, saml_fallback)
+        (closing_prs, timeline_may_be_incomplete)
     }
 
     /// Fetch releases from GitHub, optionally filtered by date
