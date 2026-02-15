@@ -510,10 +510,7 @@ impl GitHubClient {
 
         let mut current_page = result.value;
         let client = result.client;
-        let saml_fallback = matches!(
-            result.selection,
-            ClientSelection::Fallback(FallbackReason::Saml)
-        );
+        let saml_fallback = matches!(result.selection, ClientSelection::Fallback(_));
 
         // Collect all timeline events to get closing commits and referenced PRs
         loop {
@@ -1013,7 +1010,7 @@ impl GitHubClient {
             return Err(WtgError::GhConnectionLost);
         };
 
-        // Try the backup, but if it also fails with SAML, return original error
+        // Try the backup; if it also fails, return the original main-client error for SAML
         match Self::await_with_timeout_and_error(api_call(backup)).await {
             Ok(result) => Ok(ApiCallResult {
                 value: result,
