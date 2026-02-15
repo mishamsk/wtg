@@ -13,7 +13,7 @@ use crate::changelog;
 use crate::error::{WtgError, WtgResult};
 use crate::git::{CommitInfo, TagInfo, looks_like_commit_hash};
 use crate::github::{ExtendedIssueInfo, GhRepoInfo, GitHubClient, PullRequestInfo};
-use crate::notice::NoticeCallback;
+use crate::notice::{Notice, NoticeCallback};
 use crate::parse_input::{ParsedQuery, Query};
 use crate::release_filter::ReleaseFilter;
 
@@ -119,8 +119,6 @@ impl GitHubBackend {
         None
     }
 }
-
-use crate::notice::Notice;
 
 #[async_trait]
 impl Backend for GitHubBackend {

@@ -372,6 +372,20 @@ fn display_missing_info(info: &EnrichedInfo) {
         println!();
     }
 
+    // SAML SSO warning: timeline may be incomplete even when a PR was found
+    if let Some(issue) = info.issue.as_ref()
+        && info.pr.is_some()
+        && issue.timeline_may_be_incomplete
+    {
+        println!(
+            "{}",
+            "⚠️  This org requires SAML SSO - we might be missing cross-project refs. Grant your token access to find out!"
+                .yellow()
+                .italic()
+        );
+        println!();
+    }
+
     // PR without commit (either not merged, or merged but from a cross-project ref we do not have access to)
     if let Some(pr_info) = info.pr.as_ref()
         && info.commit.is_none()
