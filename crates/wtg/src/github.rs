@@ -510,7 +510,10 @@ impl GitHubClient {
 
         let mut current_page = result.value;
         let client = result.client;
-        let saml_fallback = matches!(result.selection, ClientSelection::Fallback(_));
+        let saml_fallback = matches!(
+            result.selection,
+            ClientSelection::Fallback(FallbackReason::Saml)
+        );
 
         // Collect all timeline events to get closing commits and referenced PRs
         loop {
