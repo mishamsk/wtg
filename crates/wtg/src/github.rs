@@ -1013,7 +1013,7 @@ impl GitHubClient {
             return Err(WtgError::GhConnectionLost);
         };
 
-        // Try the backup; if it also fails, return the original main-client error for SAML
+        // Try the backup; if it also fails, return the appropriate error
         match Self::await_with_timeout_and_error(api_call(backup)).await {
             Ok(result) => Ok(ApiCallResult {
                 value: result,
@@ -1029,7 +1029,7 @@ impl GitHubClient {
                 });
                 Err(e)
             }
-            Err(e) if e.is_gh_saml() => Err(main_error), // Return original SAML error
+            Err(e) if e.is_gh_saml() => Err(main_error), // Return original main-client error
             Err(e) => {
                 log::debug!("GitHub API error on backup client: {e:?}");
                 self.emit(Notice::GhAnonymousFallbackFailed {
