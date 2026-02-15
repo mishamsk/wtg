@@ -1032,6 +1032,9 @@ impl GitHubClient {
             Err(e) if e.is_gh_saml() => Err(main_error), // Return original SAML error
             Err(e) => {
                 log::debug!("GitHub API error on backup client: {e:?}");
+                self.emit(Notice::GhAnonymousFallbackFailed {
+                    error: format!("{e}"),
+                });
                 Err(e)
             }
         }

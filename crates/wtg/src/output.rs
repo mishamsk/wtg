@@ -834,6 +834,21 @@ pub fn print_notice(notice: Notice) {
                 );
             }
         }
+        Notice::GhAnonymousFallbackFailed { error } => {
+            eprintln!(
+                "{}",
+                "🔑 Tried anonymous fallback, but GitHub wasn't having it..."
+                    .yellow()
+                    .italic()
+            );
+            eprintln!("{}", format!("   ({error})").yellow().italic());
+            eprintln!(
+                "{}",
+                "   (Set GITHUB_TOKEN for more reliable access!)"
+                    .yellow()
+                    .italic()
+            );
+        }
         Notice::CrossProjectPrFetchFailed {
             owner,
             repo,

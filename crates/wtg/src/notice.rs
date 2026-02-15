@@ -60,6 +60,11 @@ pub enum Notice {
         /// Whether the client was authenticated or anonymous
         authenticated: bool,
     },
+    /// Anonymous fallback was attempted but failed with a non-rate-limit error
+    GhAnonymousFallbackFailed {
+        /// The error message from the failed anonymous request
+        error: String,
+    },
     /// Cross-project PR commit fetch failed (e.g., due to rate limits or auth issues)
     CrossProjectPrFetchFailed {
         /// Owner of the cross-project repo

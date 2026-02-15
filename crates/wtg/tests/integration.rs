@@ -330,8 +330,9 @@ async fn integration_specific_tag_found() {
 /// Test that an invalid `GITHUB_TOKEN` doesn't panic and attempts anonymous fallback.
 /// The anonymous fallback may itself fail (e.g., rate limits on shared CI runners),
 /// so this test only asserts the result when the fallback succeeds. When the fallback
-/// returns None, we verify a rate-limit notice was emitted to confirm fallback was
-/// actually attempted (rather than silently accepting a regression).
+/// returns None, we verify a fallback notice was emitted (rate-limit or anonymous
+/// fallback failure) to confirm fallback was actually attempted (rather than silently
+/// accepting a regression).
 #[tokio::test]
 async fn integration_invalid_github_token_falls_back_to_anonymous() {
     use std::sync::{Arc, Mutex};
@@ -364,19 +365,19 @@ async fn integration_invalid_github_token_falls_back_to_anonymous() {
         );
     } else {
         let captured = notices.lock().unwrap();
-        let got_rate_limit = captured.iter().any(|n| {
+        let got_fallback_notice = captured.iter().any(|n| {
             matches!(
                 n,
                 Notice::GhRateLimitHit {
                     authenticated: false
-                }
+                } | Notice::GhAnonymousFallbackFailed { .. }
             )
         });
         let captured_notices: Vec<String> = captured.iter().map(|n| format!("{n:?}")).collect();
         drop(captured);
         assert!(
-            got_rate_limit,
-            "Fallback returned None but no anonymous rate-limit notice was emitted; \
+            got_fallback_notice,
+            "Fallback returned None but no anonymous fallback notice was emitted; \
                  this suggests the fallback mechanism may be broken. \
                  Captured notices: {captured_notices:?}"
         );
