@@ -299,7 +299,7 @@ impl From<OctoError> for WtgError {
                 StatusCode::FORBIDDEN => {
                     let msg_lower = source.message.to_ascii_lowercase();
 
-                    if msg_lower.to_ascii_lowercase().contains("saml") {
+                    if msg_lower.contains("saml") {
                         return Self::GhSaml(err);
                     }
 

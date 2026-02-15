@@ -634,7 +634,7 @@ fn display_release_info(release: Option<TagInfo>, filter: &ReleaseFilter) {
 fn display_unsupported_host(remote: &RemoteInfo) {
     match remote.host {
         Some(RemoteHost::GitLab) => {
-            println!(
+            eprintln!(
                 "{}",
                 "🦊 GitLab spotted! Living that self-hosted life, I see..."
                     .yellow()
@@ -642,7 +642,7 @@ fn display_unsupported_host(remote: &RemoteInfo) {
             );
         }
         Some(RemoteHost::Bitbucket) => {
-            println!(
+            eprintln!(
                 "{}",
                 "🪣 Bitbucket, eh? Taking the scenic route!"
                     .yellow()
@@ -654,7 +654,7 @@ fn display_unsupported_host(remote: &RemoteInfo) {
             return;
         }
         None => {
-            println!(
+            eprintln!(
                 "{}",
                 "🌐 A custom git remote? Look at you being all independent!"
                     .yellow()
@@ -663,13 +663,13 @@ fn display_unsupported_host(remote: &RemoteInfo) {
         }
     }
 
-    println!(
+    eprintln!(
         "{}",
         "   (I can only do GitHub API stuff, but let me show you local git info...)"
             .yellow()
             .italic()
     );
-    println!();
+    eprintln!();
 }
 
 fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
@@ -682,7 +682,7 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
         })
         .collect();
 
-    println!(
+    eprintln!(
         "{}",
         format!(
             "🤯 Whoa, {} remotes pointing to {}? I'm getting dizzy!",
@@ -692,19 +692,19 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
         .yellow()
         .italic()
     );
-    println!(
+    eprintln!(
         "{}",
         "   (You've got quite the multi-cloud setup going on here...)"
             .yellow()
             .italic()
     );
-    println!(
+    eprintln!(
         "{}",
         "   (I can only do GitHub API stuff, but let me show you local git info...)"
             .yellow()
             .italic()
     );
-    println!();
+    eprintln!();
 }
 
 /// Print a notice to stderr.

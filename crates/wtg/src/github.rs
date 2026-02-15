@@ -526,7 +526,7 @@ impl GitHubClient {
         );
 
         // Collect all timeline events to get closing commits and referenced PRs
-        loop {
+        'pagination: loop {
             for event in &current_page.items {
                 // Collect candidate PRs from cross-references
                 if let Some(source) = event.source.as_ref() {
@@ -549,7 +549,7 @@ impl GitHubClient {
                             if matches!(event.event, TimelineEventType::Closed) {
                                 // If it's a Closed event, assume this is the closing PR
                                 closing_prs.push(pr_info);
-                                break; // No need to check further events
+                                break 'pagination; // No need to check further events or pages
                             }
 
                             // Otherwise, only consider CrossReferenced/Referenced events
