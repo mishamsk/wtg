@@ -48,8 +48,8 @@ Scenario 5 is the bug. When backup fails with timeout or generic GitHub error, n
 **Files:**
 - Modify: whatever file formats notices for CLI display (need to check where Notice variants are matched for user-facing output)
 
-- [ ] Add display/formatting for the new notice variant, keeping it consistent with existing notice messages
-- [ ] Run `just test` - must pass
+- [x] Add display/formatting for the new notice variant, keeping it consistent with existing notice messages
+- [x] Run `just test` - must pass
 
 ### Task 3: Verify acceptance criteria
 
