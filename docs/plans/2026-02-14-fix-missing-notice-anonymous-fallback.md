@@ -53,7 +53,7 @@ Scenario 5 is the bug. When backup fails with timeout or generic GitHub error, n
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] Run `just fmt` and `just fmt-check`
-- [ ] Run `just lint`
-- [ ] Run `just test`
-- [ ] Manually verify: the test `integration_invalid_github_token_falls_back_to_anonymous` handles both rate-limit and non-rate-limit backup failures gracefully
+- [x] Run `just fmt` and `just fmt-check`
+- [x] Run `just lint`
+- [x] Run `just test`
+- [x] Manually verify: the test `integration_invalid_github_token_falls_back_to_anonymous` handles both rate-limit and non-rate-limit backup failures gracefully
