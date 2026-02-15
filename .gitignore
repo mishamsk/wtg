@@ -106,3 +106,6 @@ CLAUDE.local.md
 
 # ralphex progress logs
 .ralphex/progress/
+
+# Do not commit local plans
+docs/plans/
