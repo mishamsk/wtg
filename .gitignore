@@ -103,3 +103,9 @@ CLAUDE.local.md
 
 # Git worktrees
 .worktrees/
+
+# ralphex progress logs
+.ralphex/progress/
+
+# Do not commit local plans
+docs/plans/

@@ -361,6 +361,28 @@ fn display_missing_info(info: &EnrichedInfo) {
             "🤷 No PR found for this issue... still hunting for the fix!"
         };
         println!("{}", message.yellow().italic());
+        if issue.timeline_may_be_incomplete {
+            println!(
+                "{}",
+                "   (Timeline data may be incomplete - we might be missing cross-project refs. Check your token access!)"
+                    .yellow()
+                    .italic()
+            );
+        }
+        println!();
+    }
+
+    // Warning: timeline may be incomplete even when a PR was found
+    if let Some(issue) = info.issue.as_ref()
+        && info.pr.is_some()
+        && issue.timeline_may_be_incomplete
+    {
+        println!(
+            "{}",
+            "⚠️  Timeline data may be incomplete - we might be missing cross-project refs. Check your token access!"
+                .yellow()
+                .italic()
+        );
         println!();
     }
 
@@ -612,7 +634,7 @@ fn display_release_info(release: Option<TagInfo>, filter: &ReleaseFilter) {
 fn display_unsupported_host(remote: &RemoteInfo) {
     match remote.host {
         Some(RemoteHost::GitLab) => {
-            println!(
+            eprintln!(
                 "{}",
                 "🦊 GitLab spotted! Living that self-hosted life, I see..."
                     .yellow()
@@ -620,7 +642,7 @@ fn display_unsupported_host(remote: &RemoteInfo) {
             );
         }
         Some(RemoteHost::Bitbucket) => {
-            println!(
+            eprintln!(
                 "{}",
                 "🪣 Bitbucket, eh? Taking the scenic route!"
                     .yellow()
@@ -632,7 +654,7 @@ fn display_unsupported_host(remote: &RemoteInfo) {
             return;
         }
         None => {
-            println!(
+            eprintln!(
                 "{}",
                 "🌐 A custom git remote? Look at you being all independent!"
                     .yellow()
@@ -641,13 +663,13 @@ fn display_unsupported_host(remote: &RemoteInfo) {
         }
     }
 
-    println!(
+    eprintln!(
         "{}",
         "   (I can only do GitHub API stuff, but let me show you local git info...)"
             .yellow()
             .italic()
     );
-    println!();
+    eprintln!();
 }
 
 fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
@@ -660,7 +682,7 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
         })
         .collect();
 
-    println!(
+    eprintln!(
         "{}",
         format!(
             "🤯 Whoa, {} remotes pointing to {}? I'm getting dizzy!",
@@ -670,19 +692,19 @@ fn display_mixed_remotes(hosts: &[RemoteHost], count: usize) {
         .yellow()
         .italic()
     );
-    println!(
+    eprintln!(
         "{}",
         "   (You've got quite the multi-cloud setup going on here...)"
             .yellow()
             .italic()
     );
-    println!(
+    eprintln!(
         "{}",
         "   (I can only do GitHub API stuff, but let me show you local git info...)"
             .yellow()
             .italic()
     );
-    println!();
+    eprintln!();
 }
 
 /// Print a notice to stderr.
@@ -811,6 +833,43 @@ pub fn print_notice(notice: Notice) {
                         .italic()
                 );
             }
+        }
+        Notice::GhAnonymousFallbackFailed { error } => {
+            eprintln!(
+                "{}",
+                "🔑 Tried anonymous fallback, but GitHub wasn't having it..."
+                    .yellow()
+                    .italic()
+            );
+            eprintln!("{}", format!("   ({error})").yellow().italic());
+            eprintln!(
+                "{}",
+                "   (Set GITHUB_TOKEN for more reliable access!)"
+                    .yellow()
+                    .italic()
+            );
+        }
+        Notice::CrossProjectPrFetchFailed {
+            owner,
+            repo,
+            pr_number,
+            error,
+        } => {
+            eprintln!(
+                "{}",
+                format!(
+                    "🔍 Spotted PR #{pr_number} in {owner}/{repo}, but it's playing hard to get..."
+                )
+                .yellow()
+                .italic()
+            );
+            eprintln!("{}", format!("   ({error})").yellow().italic());
+            eprintln!(
+                "{}",
+                "   (Cross-project sleuthing needs a GITHUB_TOKEN with access!)"
+                    .yellow()
+                    .italic()
+            );
         }
     }
 }

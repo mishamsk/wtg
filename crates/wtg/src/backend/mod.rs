@@ -34,6 +34,14 @@ use crate::remote::{RemoteHost, RemoteInfo};
 #[async_trait]
 pub trait Backend: Send + Sync {
     // ============================================
+    // Notice emission (default: no-op)
+    // ============================================
+
+    /// Emit a notice to the registered callback.
+    /// Used by resolution code to surface warnings to the user.
+    fn emit_notice(&self, _notice: Notice) {}
+
+    // ============================================
     // Cross-project support (default: not supported)
     // ============================================
 
@@ -227,6 +235,7 @@ pub fn resolve_backend_with_notices(
         } else {
             // Can't access git locally, use pure API (soft notice)
             notice_cb(Notice::ApiOnly);
+            github.set_notice_callback(notice_cb);
             Ok(Box::new(github))
         }
     } else {

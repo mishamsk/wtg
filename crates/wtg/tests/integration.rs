@@ -327,6 +327,63 @@ async fn integration_specific_tag_found() {
     );
 }
 
+/// Test that an invalid `GITHUB_TOKEN` doesn't panic and attempts anonymous fallback.
+/// The anonymous fallback may itself fail (e.g., rate limits on shared CI runners),
+/// so this test only asserts the result when the fallback succeeds. When the fallback
+/// returns None, we verify a fallback notice was emitted (rate-limit or anonymous
+/// fallback failure) to confirm fallback was actually attempted (rather than silently
+/// accepting a regression).
+#[tokio::test]
+async fn integration_invalid_github_token_falls_back_to_anonymous() {
+    use std::sync::{Arc, Mutex};
+    use wtg_cli::github::{GhRepoInfo, GitHubClient};
+    use wtg_cli::notice::Notice;
+
+    // Build a client with an invalid token to force 401 Bad Credentials
+    let client = GitHubClient::new_with_token("ghp_clearly_not_a_real_token_000000000".to_string())
+        .expect("Failed to create GitHub client");
+
+    // Track notices to verify fallback behavior even when the result is None
+    let notices: Arc<Mutex<Vec<Notice>>> = Arc::new(Mutex::new(Vec::new()));
+    let notices_clone = Arc::clone(&notices);
+    client.set_notice_callback(Arc::new(move |notice| {
+        notices_clone.lock().unwrap().push(notice);
+    }));
+
+    // Fetch a known commit via a single API call. The bad token triggers fallback
+    // to the anonymous backup client. If anonymous rate limit is exhausted
+    // (common on shared CI runners), the result is None - that's acceptable
+    // only if a rate-limit notice confirms the fallback was actually attempted.
+    let repo_info = GhRepoInfo::new("go-task".to_string(), "task".to_string());
+    let commit = client.fetch_commit_full_info(&repo_info, "15b7e3c").await;
+
+    if let Some(commit) = commit {
+        assert!(
+            commit.hash.starts_with("15b7e3c"),
+            "Expected commit hash starting with 15b7e3c, got {}",
+            commit.hash
+        );
+    } else {
+        let captured = notices.lock().unwrap();
+        let got_fallback_notice = captured.iter().any(|n| {
+            matches!(
+                n,
+                Notice::GhRateLimitHit {
+                    authenticated: false
+                } | Notice::GhAnonymousFallbackFailed { .. }
+            )
+        });
+        let captured_notices: Vec<String> = captured.iter().map(|n| format!("{n:?}")).collect();
+        drop(captured);
+        assert!(
+            got_fallback_notice,
+            "Fallback returned None but no anonymous fallback notice was emitted; \
+                 this suggests the fallback mechanism may be broken. \
+                 Captured notices: {captured_notices:?}"
+        );
+    }
+}
+
 /// Convert `IdentifiedThing` to a consistent snapshot structure
 fn to_snapshot(result: &IdentifiedThing) -> IntegrationSnapshot {
     match result {
