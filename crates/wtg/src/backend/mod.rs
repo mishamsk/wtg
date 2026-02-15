@@ -235,6 +235,7 @@ pub fn resolve_backend_with_notices(
         } else {
             // Can't access git locally, use pure API (soft notice)
             notice_cb(Notice::ApiOnly);
+            github.set_notice_callback(notice_cb);
             Ok(Box::new(github))
         }
     } else {
