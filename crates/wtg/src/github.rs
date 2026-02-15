@@ -274,6 +274,10 @@ impl GitHubClient {
     /// Returns `None` if the client cannot be built.
     #[must_use]
     pub fn new_with_token(token: String) -> Option<Self> {
+        if token.trim().is_empty() {
+            return None;
+        }
+
         let connect_timeout = Some(Self::connect_timeout());
         let read_timeout = Some(Self::read_timeout());
 
@@ -369,6 +373,7 @@ impl GitHubClient {
             if let Ok(content) = fs::read_to_string(&xdg_path)
                 && let Ok(config) = serde_yaml::from_str::<GhConfig>(&content)
                 && let Some(token) = config.github_com.oauth_token
+                && !token.trim().is_empty()
             {
                 return Some(token);
             }
@@ -383,7 +388,10 @@ impl GitHubClient {
             if let Ok(content) = fs::read_to_string(&config_path)
                 && let Ok(config) = serde_yaml::from_str::<GhConfig>(&content)
             {
-                return config.github_com.oauth_token;
+                return config
+                    .github_com
+                    .oauth_token
+                    .filter(|t| !t.trim().is_empty());
             }
         }
 
@@ -512,7 +520,7 @@ impl GitHubClient {
         let client = result.client;
         let saml_fallback = matches!(
             result.selection,
-            ClientSelection::Fallback(FallbackReason::Saml)
+            ClientSelection::Fallback(FallbackReason::Saml | FallbackReason::BadCredentials)
         );
 
         // Collect all timeline events to get closing commits and referenced PRs

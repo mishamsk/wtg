@@ -364,7 +364,7 @@ fn display_missing_info(info: &EnrichedInfo) {
         if issue.timeline_may_be_incomplete {
             println!(
                 "{}",
-                "   (This org requires SAML SSO - we might be missing cross-project refs. Grant your token access to find out!)"
+                "   (Timeline data may be incomplete - we might be missing cross-project refs. Check your token access!)"
                     .yellow()
                     .italic()
             );
@@ -372,14 +372,14 @@ fn display_missing_info(info: &EnrichedInfo) {
         println!();
     }
 
-    // SAML SSO warning: timeline may be incomplete even when a PR was found
+    // Warning: timeline may be incomplete even when a PR was found
     if let Some(issue) = info.issue.as_ref()
         && info.pr.is_some()
         && issue.timeline_may_be_incomplete
     {
         println!(
             "{}",
-            "⚠️  This org requires SAML SSO - we might be missing cross-project refs. Grant your token access to find out!"
+            "⚠️  Timeline data may be incomplete - we might be missing cross-project refs. Check your token access!"
                 .yellow()
                 .italic()
         );
