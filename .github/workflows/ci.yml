@@ -103,10 +103,9 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - name: Install cargo-nextest
-        uses: baptiste0928/cargo-install@v3
+        uses: taiki-e/install-action@v2
         with:
-          crate: cargo-nextest
-          locked: true
+          tool: cargo-nextest
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
       - name: Basic build
