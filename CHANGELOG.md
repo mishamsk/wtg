@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 -
 
 ### Fixed
--
+- Support Python 3.15 with prebuilt wheels for macOS ARM64, Linux x86_64, and Windows x86_64, and updated Python build dependencies. ([#13](https://github.com/mishamsk/wtg/pull/13))
 
 ### Security
 -
