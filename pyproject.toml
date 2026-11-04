@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.6,<2.0"]
+requires = ["maturin>=1.16,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -12,6 +12,7 @@ authors = [{ name = "Mike Perlov" }]
 license = { text = "MIT" }
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Rust",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",

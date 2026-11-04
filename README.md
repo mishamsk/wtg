@@ -37,6 +37,10 @@ uvx --from wtg-cli wtg https://github.com/go-task/task/issues/1322
 
 ### Recommended: Python package
 
+Prebuilt CPython 3.11–3.15 wheels are available for macOS ARM64, Linux x86_64,
+and Windows x86_64. Other supported Python versions build from source and require
+a Rust toolchain.
+
 Run the (python) CLI without installing anything permanently:
 
 ```bash
