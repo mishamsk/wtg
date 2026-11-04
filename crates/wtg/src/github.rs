@@ -636,7 +636,7 @@ impl GitHubClient {
             // Sort releases by created_at descending
             current_page
                 .items
-                .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                .sort_by_key(|release| std::cmp::Reverse(release.created_at));
 
             for release in current_page.items {
                 // Check if this release is too old
