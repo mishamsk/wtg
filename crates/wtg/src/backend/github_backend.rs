@@ -224,7 +224,7 @@ impl Backend for GitHubBackend {
             .filter(|r| r.created_at.is_some_and(|d| d < current.created_at))
             .collect();
 
-        candidates.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        candidates.sort_by_key(|release| std::cmp::Reverse(release.created_at));
 
         if let Some(prev) = candidates.first() {
             return self.find_tag(&prev.tag_name).await.map(Some);

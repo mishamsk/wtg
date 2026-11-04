@@ -109,7 +109,7 @@ async fn test_identify_file(test_repo: TestRepoFixture) {
             assert_eq!(last_commit.author_name, "Another Author");
 
             // Check previous authors (should have at least one - the original author)
-            assert!(!file_result.file_info.previous_authors.is_empty());
+            assert_ne!(file_result.file_info.previous_authors.len(), 0);
             let prev_author = &file_result.file_info.previous_authors[0];
             assert_eq!(prev_author.1, "Test User"); // name
 

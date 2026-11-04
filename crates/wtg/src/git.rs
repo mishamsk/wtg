@@ -733,8 +733,7 @@ impl GitRepo {
         self.with_repo(|repo| {
             Oid::from_str(commit_hash)
                 .and_then(|oid| repo.find_commit(oid))
-                .map(|c| c.time().seconds())
-                .unwrap_or(0)
+                .map_or(0, |c| c.time().seconds())
         })
     }
 

@@ -120,12 +120,12 @@ fn display_tag(result: &TagResult) {
 /// Display enriched info - the main display logic
 /// Order depends on what the user searched for
 fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
+    display_identification(&info.entry_point);
+    println!();
+
     match &info.entry_point {
         EntryPoint::IssueNumber(_) => {
             // User searched for issue - lead with issue
-            display_identification(&info.entry_point);
-            println!();
-
             if let Some(issue) = &info.issue {
                 display_issue_section(issue);
                 println!();
@@ -140,18 +140,9 @@ fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
                 display_commit_section(commit_info, info.pr.as_ref());
                 println!();
             }
-
-            display_missing_info(&info);
-
-            if info.commit.is_some() {
-                display_release_info(info.release, filter);
-            }
         }
         EntryPoint::PullRequestNumber(_) => {
             // User searched for PR - lead with PR
-            display_identification(&info.entry_point);
-            println!();
-
             if let Some(pr) = &info.pr {
                 display_pr_section(pr, false); // false = not a fix, just a PR
                 println!();
@@ -161,18 +152,9 @@ fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
                 display_commit_section(commit_info, info.pr.as_ref());
                 println!();
             }
-
-            display_missing_info(&info);
-
-            if info.commit.is_some() {
-                display_release_info(info.release, filter);
-            }
         }
         _ => {
             // User searched for commit or something else - lead with commit
-            display_identification(&info.entry_point);
-            println!();
-
             if let Some(commit_info) = info.commit.as_ref() {
                 display_commit_section(commit_info, info.pr.as_ref());
                 println!();
@@ -187,13 +169,13 @@ fn display_enriched(info: EnrichedInfo, filter: &ReleaseFilter) {
                 display_issue_section(issue);
                 println!();
             }
-
-            display_missing_info(&info);
-
-            if info.commit.is_some() {
-                display_release_info(info.release, filter);
-            }
         }
+    }
+
+    display_missing_info(&info);
+
+    if info.commit.is_some() {
+        display_release_info(info.release, filter);
     }
 }
 
