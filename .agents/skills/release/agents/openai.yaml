@@ -1,0 +1,5 @@
+interface:
+  display_name: "Release wtg"
+  short_description: "Prepare and publish an approved wtg release"
+policy:
+  allow_implicit_invocation: false
