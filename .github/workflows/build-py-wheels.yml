@@ -40,7 +40,7 @@ jobs:
           echo 'matrix=["3.11", "3.12", "3.13", "3.14", "3.15"]' >> "$GITHUB_OUTPUT"
 
   sdist:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -81,7 +81,7 @@ jobs:
         platform:
           # - runner: macos-13
           #   target: x86_64
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64
         python-version: ${{ fromJSON(needs.define-py-matrix.outputs.py-matrix) }}
     steps:
