@@ -18,6 +18,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 -
 
 ### Removed
+-
+
+### Fixed
+-
+
+### Security
+-
+
+## [0.3.2] - 2026-11-14
+
+### Added
+-
+
+### Changed
+-
+
+### Deprecated
+-
+
+### Removed
 - Support for end-of-life Python 3.9 and 3.10. ([#13](https://github.com/mishamsk/wtg/pull/13))
 
 ### Fixed
