@@ -21,8 +21,8 @@ fn run_cli(argv: Vec<String>) -> i32 {
     }
 }
 
-#[pymodule]
-fn _wtg(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule(name = "_wtg")]
+fn wtg_module(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_cli, m)?)?;
     Ok(())
 }

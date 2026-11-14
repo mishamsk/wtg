@@ -18,10 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 -
 
 ### Removed
--
+- Support for end-of-life Python 3.9 and 3.10. ([#13](https://github.com/mishamsk/wtg/pull/13))
 
 ### Fixed
--
+- Support Python versions through 3.15, with prebuilt CPython 3.11–3.15 wheels and updated Python build dependencies. ([#13](https://github.com/mishamsk/wtg/pull/13))
 
 ### Security
 -

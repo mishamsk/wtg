@@ -32,8 +32,7 @@ impl From<RepoCommit> for CommitInfo {
 
         let (author_login, author_url) = commit
             .author
-            .map(|author| (Some(author.login), Some(author.html_url.into())))
-            .unwrap_or_default();
+            .map_or_default(|author| (Some(author.login), Some(author.html_url.into())));
 
         let date = commit
             .commit
@@ -171,7 +170,7 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequestInfo {
             title: pr.title.unwrap_or_default(),
             body: pr.body,
             state: format!("{:?}", pr.state),
-            url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+            url: pr.html_url.map_or_default(|u| u.to_string()),
             merged: pr.merged.unwrap_or(false),
             merge_commit_sha: pr.merge_commit_sha,
             author,
@@ -636,7 +635,7 @@ impl GitHubClient {
             // Sort releases by created_at descending
             current_page
                 .items
-                .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                .sort_by_key(|release| std::cmp::Reverse(release.created_at));
 
             for release in current_page.items {
                 // Check if this release is too old

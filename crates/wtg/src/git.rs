@@ -249,8 +249,7 @@ impl GitRepo {
     fn collect_remotes(repo: &Repository) -> Vec<RemoteInfo> {
         let remote_names: Vec<String> = repo
             .remotes()
-            .map(|names| names.iter().flatten().map(str::to_string).collect())
-            .unwrap_or_default();
+            .map_or_default(|names| names.iter().flatten().map(str::to_string).collect());
 
         remote_names
             .into_iter()
@@ -733,8 +732,7 @@ impl GitRepo {
         self.with_repo(|repo| {
             Oid::from_str(commit_hash)
                 .and_then(|oid| repo.find_commit(oid))
-                .map(|c| c.time().seconds())
-                .unwrap_or(0)
+                .map_or(0, |c| c.time().seconds())
         })
     }
 

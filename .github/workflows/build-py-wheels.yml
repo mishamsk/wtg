@@ -37,7 +37,7 @@ jobs:
       - name: Set up Python matrix
         id: matrix
         run: |
-          echo 'matrix=["3.11", "3.12", "3.13", "3.14"]' >> "$GITHUB_OUTPUT"
+          echo 'matrix=["3.11", "3.12", "3.13", "3.14", "3.15"]' >> "$GITHUB_OUTPUT"
 
   sdist:
     runs-on: ubuntu-latest
@@ -58,6 +58,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
+          maturin-version: "1.16.0"
           args: --out dist
       - name: "Test sdist"
         run: |
@@ -80,7 +81,7 @@ jobs:
         platform:
           # - runner: macos-13
           #   target: x86_64
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64
         python-version: ${{ fromJSON(needs.define-py-matrix.outputs.py-matrix) }}
     steps:
@@ -101,15 +102,18 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --locked --out dist
+          maturin-version: "1.16.0"
+          args: --release --locked --auditwheel repair --out dist
           sccache: "true"
       - name: "Test wheel"
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install ${{ env.PACKAGE_NAME }} --no-index --find-links dist --force-reinstall
+          pip install ${{ env.PACKAGE_NAME }} --only-binary :all: --no-index --find-links dist --force-reinstall
           wtg --help
+          wtg --version
+          python -m wtg_cli --version
       - name: "Upload wheels"
         uses: actions/upload-artifact@v4
         with:
@@ -141,6 +145,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-pc-windows-msvc
+          maturin-version: "1.16.0"
           args: --release --locked --out dist
           sccache: "true"
       - name: "Test wheel"
@@ -149,8 +154,10 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/Scripts/activate
-          pip install ${{ env.PACKAGE_NAME }} --no-index --find-links dist --force-reinstall
+          pip install ${{ env.PACKAGE_NAME }} --only-binary :all: --no-index --find-links dist --force-reinstall
           wtg --help
+          wtg --version
+          python -m wtg_cli --version
       - name: "Upload wheels"
         uses: actions/upload-artifact@v4
         with:
@@ -181,6 +188,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-unknown-linux-gnu
+          maturin-version: "1.16.0"
           args: --release --locked --out dist -i python${{ matrix.python-version }}
           sccache: "true"
           manylinux: auto
@@ -191,8 +199,10 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install ${{ env.PACKAGE_NAME }} --no-index --find-links dist --force-reinstall
+          pip install ${{ env.PACKAGE_NAME }} --only-binary :all: --no-index --find-links dist --force-reinstall
           wtg --help
+          wtg --version
+          python -m wtg_cli --version
       - name: "Upload wheels"
         uses: actions/upload-artifact@v4
         with:
