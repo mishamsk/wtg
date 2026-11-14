@@ -1,75 +1,104 @@
 ---
 name: release
-description: Prepare and publish a wtg release, only when explicitly invoked by the user.
+description: Prepare and publish a release with changelog review and test validation
 argument-hint: "[version]"
 disable-model-invocation: true
 ---
 
-# Release wtg
+## Release Command
 
-Run only on explicit user invocation: `$release [version]` in Codex or
-`/release [version]` in Claude Code. Mentions, quoted examples, and general
-release-preparation requests do not invoke this workflow. Take the optional version
-from the user's invocation; otherwise propose a version from the changes.
+Execute the release flow for wtg. Optional version argument (e.g., `/release 0.3.0` in Claude Code or `$release 0.3.0` in Codex).
 
-## Prerequisites
+**Target version:** Use the version from the invocation (if empty, infer from changes using semver).
 
-Require a clean worktree on `main`, passing CI for the current HEAD, and a previous
-release tag. Check the current workspace version, remote state, and existing tags
-before changing release files. Report unmet prerequisites without switching branches,
-rewriting tags, or discarding work.
+## Context Collection
 
-## Changelog approval
+Run these commands to collect context:
 
-Compare commits since `git describe --tags --abbrev=0` and merged GitHub PRs against
-`CHANGELOG.md`'s Unreleased section. Add missing user-facing changes using the
-existing categories, verbosity, and PR-link format. Show the changelog diff and
-wait for user approval before assigning the version or publishing anything.
+- Current branch: `git branch --show-current`
+- Working tree status: `git status --porcelain`
+- Last tag: `git describe --tags --abbrev=0 2>/dev/null || echo "no-tags"`
+- Current Cargo.toml version: `grep '^version = ' Cargo.toml | head -1`
 
-## Prepare the version
+## Pre-flight Checks
 
-Use the requested version; otherwise propose a semver bump: major for breaking
-changes, minor for features, patch for fixes and compatibility updates. Date the
-release section, retain an empty Unreleased section, update `[workspace.package]`
-in `Cargo.toml`, and refresh `Cargo.lock` with `cargo tree --depth 0`.
+Before proceeding, verify:
+1. Working tree is clean (no output from git status --porcelain)
+2. Currently on main branch
+3. A previous tag exists
 
-Run `just ci` with the toolchains used by CI. Review and commit only the release
-files (`CHANGELOG.md`, `Cargo.toml`, `Cargo.lock`) as
-`chore: prepare release vX.Y.Z`, then push to `origin/main`. Stop and report failed
-checks or unexpected changes rather than bypassing them.
+If any check fails, stop and report the issue.
 
-## Validate TestPyPI
+## Execution Steps
 
-Dispatch `publish-test-pypi.yml` with `gh workflow run publish-test-pypi.yml --ref main`. Track that run's
-ID and commit; wait for completion with a 15-minute timeout. The workflow publishes
-`X.Y.Z.devN`, where `N` is its run number. Verify that exact version rather than
-allowing an older TestPyPI release to satisfy the check.
+### Step 1: Changelog Review (Use Subagent)
 
-Set `test_version` to that published version, then clear the package cache and run:
+Launch a subagent to thoroughly review changes between HEAD and last tag:
+- List all commits since last tag
+- For each commit, check if it relates to a PR (look for PR numbers in commit messages)
+- Cross-reference merged PRs via `gh pr list --state merged --base main`
+- Compare findings against `CHANGELOG.md` Unreleased section
+- Identify user-facing items that are missing
+
+Present findings and propose CHANGELOG.md updates. Match the verbosity and style of existing entries. Include PR links in format `([#N](https://github.com/mishamsk/wtg/pull/N))`.
+
+### Step 2: User Verification
+
+After updating CHANGELOG.md, show the diff and ask user to confirm changes are good.
+
+### Step 3: Version Assignment
+
+If version argument provided, use it. Otherwise, infer from changelog:
+- If Unreleased has entries in "Added" → bump MINOR
+- If only "Fixed" entries → bump PATCH
+- If breaking changes noted → bump MAJOR
+
+Then:
+1. Create new empty Unreleased section in CHANGELOG.md
+2. Change `[Unreleased]` to `[X.Y.Z]` with today's date
+3. Update version in workspace Cargo.toml
+4. Run `cargo tree -d 0` to update Cargo.lock with new version
+
+### Step 4: Commit and Push
+
+```bash
+git add CHANGELOG.md Cargo.toml Cargo.lock
+git commit -m "chore: prepare release vX.Y.Z"
+git push origin main
+```
+
+### Step 5: Test PyPI Validation
+
+```bash
+gh workflow run publish-test-pypi.yml
+```
+
+Poll workflow status every 2 minutes until completion (max 15 minutes). When complete:
 
 ```bash
 uv cache clean wtg-cli
-uvx --index-url https://test.pypi.org/simple/ --refresh --from "wtg-cli==$test_version" wtg --help
-uvx --index-url https://test.pypi.org/simple/ --from "wtg-cli==$test_version" wtg --version
-uvx --index-url https://test.pypi.org/simple/ --from "wtg-cli==$test_version" wtg v0.1.0
+uvx --index-url https://test.pypi.org/simple/ --refresh --from wtg-cli wtg --help
+uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg --version
+uvx --index-url https://test.pypi.org/simple/ --from wtg-cli wtg v0.1.0
 ```
 
-Confirm the reported version matches. Repeat with `--python` for newly supported
-Python versions. If publishing or installation fails, or the run times out, report
-the results and await guidance; do not proceed to production.
+### Step 6: Final Confirmation
 
-## Production approval and publishing
+Report test results. If all passed, ask user: "Ready to trigger the production release?"
 
-Present the TestPyPI results and obtain explicit final release confirmation.
-After confirmation, ensure the release commit is still the intended `main` HEAD,
-then create and push its signed tag:
+### Step 7: Tag and Release
+
+If user confirms:
 
 ```bash
 git tag -s -m "release vX.Y.Z" vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The tag triggers `.github/workflows/release.yml`: version validation, CI, wheel
-builds, crates.io and PyPI publishing, then a draft GitHub release. Report the
-workflow link and status; distinguish a triggered workflow from successful
-publishing. Leave the GitHub release as a draft unless the user asks to publish it.
+Report success with link to GitHub Actions release workflow.
+
+## Important Notes
+
+- Follow `AGENTS.md` for code standards
+- Run `just fmt` and `just lint` if any Rust files are modified
+- Never use --no-verify when committing
