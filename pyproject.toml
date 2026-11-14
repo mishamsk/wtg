@@ -12,6 +12,12 @@ authors = [{ name = "Mike Perlov" }]
 license = { text = "MIT" }
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
     "Programming Language :: Rust",
     "License :: OSI Approved :: MIT License",
@@ -29,7 +35,10 @@ python-source = "src"
 bindings = "pyo3"
 strip = true
 profile = "release"
-include = [{ path = "LICENSE", format = "sdist" }]
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "rust-toolchain.toml", format = "sdist" },
+]
 
 [tool.uv]
 cache-keys = [{ file = "crates/wtg-python/Cargo.toml" }]

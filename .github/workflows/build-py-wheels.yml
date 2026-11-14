@@ -2,14 +2,6 @@
 name: "Build wheels"
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/build-py-wheels.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
-      - "pyproject.toml"
-      - "src/wtg_cli/**"
   workflow_call:
     inputs:
       version_suffix:
@@ -53,7 +45,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.15"
+          python-version: "3.9"
       - name: "Apply version suffix"
         if: inputs.version_suffix != ''
         env:
@@ -66,7 +58,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          version: "1.16.0"
+          maturin-version: "1.16.0"
           args: --out dist
       - name: "Test sdist"
         run: |
@@ -110,7 +102,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          version: "1.16.0"
+          maturin-version: "1.16.0"
           args: --release --locked --auditwheel repair --out dist
           sccache: "true"
       - name: "Test wheel"
@@ -153,7 +145,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-pc-windows-msvc
-          version: "1.16.0"
+          maturin-version: "1.16.0"
           args: --release --locked --out dist
           sccache: "true"
       - name: "Test wheel"
@@ -196,7 +188,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-unknown-linux-gnu
-          version: "1.16.0"
+          maturin-version: "1.16.0"
           args: --release --locked --out dist -i python${{ matrix.python-version }}
           sccache: "true"
           manylinux: auto
