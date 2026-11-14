@@ -30,9 +30,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+        run: rustup show
       - name: Format check
         run: just fmt-check
 
@@ -45,9 +43,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: just lint
@@ -62,7 +58,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@nightly
+        run: rustup toolchain install nightly-2026-11-04 --profile minimal
       - name: Install cargo udeps
         uses: taiki-e/install-action@v2
         with:
@@ -76,6 +72,8 @@ jobs:
   # Tests
   # Rust tests for supported platforms.
   test-rust:
+    # Preserve the required check names while the version comes from rust-toolchain.toml.
+    name: test-rust (${{ matrix.build }}, ${{ matrix.os }}, stable)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -83,13 +81,10 @@ jobs:
         include:
           - build: stable
             os: ubuntu-latest
-            rust: stable
           - build: macos
             os: macos-latest
-            rust: stable
           - build: win
             os: windows-latest
-            rust: stable
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -99,9 +94,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+        run: rustup show
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:

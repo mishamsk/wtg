@@ -41,7 +41,7 @@ check:
     cargo check --workspace --all-targets --all-features
 
 udeps:
-    cargo +nightly udeps --workspace --all-features --all-targets --release
+    cargo +nightly-2026-11-04 udeps --workspace --all-features --all-targets --release
 
 # Run the full CI flow locally.
 ci:
