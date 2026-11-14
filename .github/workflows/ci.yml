@@ -108,11 +108,6 @@ jobs:
       - name: Unit and offline tests
         if: runner.os != 'Linux'
         run: just test
-      - name: GitHub API quota
-        if: runner.os == 'Linux'
-        run: gh api rate_limit --jq '.resources.core | {limit, remaining, reset}'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Tests including live GitHub API
         if: runner.os == 'Linux'
         run: just test-ci

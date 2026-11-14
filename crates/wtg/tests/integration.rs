@@ -84,11 +84,6 @@ async fn integration_identify_file() {
 async fn integration_identify_ghostty_issue_4800() {
     use wtg_cli::github::{GhRepoInfo, GitHubClient};
 
-    let _ = env_logger::Builder::new()
-        .filter_module("wtg_cli", log::LevelFilter::Debug)
-        .is_test(true)
-        .try_init();
-
     // Create a GitHub client for the ghostty repository
     let repo_info = GhRepoInfo::new("ghostty-org".to_string(), "ghostty".to_string());
     let client = GitHubClient::new().expect("Failed to create GitHub client");
