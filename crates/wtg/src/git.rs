@@ -249,8 +249,7 @@ impl GitRepo {
     fn collect_remotes(repo: &Repository) -> Vec<RemoteInfo> {
         let remote_names: Vec<String> = repo
             .remotes()
-            .map(|names| names.iter().flatten().map(str::to_string).collect())
-            .unwrap_or_default();
+            .map_or_default(|names| names.iter().flatten().map(str::to_string).collect());
 
         remote_names
             .into_iter()
