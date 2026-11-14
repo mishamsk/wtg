@@ -165,6 +165,6 @@ Found a bug? Want to add a snarky message? PRs welcome! Just make sure to keep t
 <details>
 <summary>Python package compatibility</summary>
 
-Python 3.9–3.15 is supported. Prebuilt CPython 3.11–3.15 wheels are available for macOS ARM64, Linux x86_64, and Windows x86_64. Other installations build from source and require a Rust toolchain.
+Python 3.11–3.15 is supported. Prebuilt CPython 3.11–3.15 wheels are available for macOS ARM64, Linux x86_64, and Windows x86_64. Other installations build from source and require a Rust toolchain.
 
 </details>

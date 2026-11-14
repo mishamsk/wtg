@@ -30,7 +30,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        run: rustup show
+        uses: ./.github/actions/setup-rust
       - name: Format check
         run: just fmt-check
 
@@ -43,7 +43,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        run: rustup show
+        uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: just lint
@@ -58,7 +58,9 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        run: rustup toolchain install nightly-2026-11-04 --profile minimal
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-04
       - name: Install cargo udeps
         uses: taiki-e/install-action@v2
         with:
@@ -94,7 +96,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
       - name: Install Rust
-        run: rustup show
+        uses: ./.github/actions/setup-rust
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
@@ -103,7 +105,16 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Basic build
         run: just build
-      - name: Tests
+      - name: Unit and offline tests
+        if: runner.os != 'Linux'
+        run: just test
+      - name: GitHub API quota
+        if: runner.os == 'Linux'
+        run: gh api rate_limit --jq '.resources.core | {limit, remaining, reset}'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tests including live GitHub API
+        if: runner.os == 'Linux'
         run: just test-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
